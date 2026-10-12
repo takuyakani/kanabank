@@ -109,8 +109,9 @@ export const ParentDashboard: React.FC = () => {
   const [routineNthWeekday, setRoutineNthWeekday] = useState<number>(1);
   const [deletingRoutine, setDeletingRoutine] = useState<RoutineTask | null>(null);
 
-  // 申請承認モーダル（ボーナス・コメント用）
+  // 申請承認モーダル（ボーナス・コメント・自由入力報酬用）
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [customRewardInput, setCustomRewardInput] = useState<number>(50);
   const [bonusInput, setBonusInput] = useState(0);
   const [parentCommentInput, setParentCommentInput] = useState('');
 
@@ -133,9 +134,17 @@ export const ParentDashboard: React.FC = () => {
   const pendingRequests = requests.filter((r) => r.status === 'pending');
   const pendingRoutineLogs = routineLogs.filter((l) => l.status === 'pending');
 
+  const approvingReq = requests.find((r) => r.id === approvingId);
+
   const handleApprove = async () => {
     if (!approvingId) return;
-    await approveRequest(approvingId, Number(bonusInput), parentCommentInput);
+    const isCustom = approvingReq?.choreId === 'custom';
+    await approveRequest(
+      approvingId,
+      Number(bonusInput),
+      parentCommentInput,
+      isCustom ? Number(customRewardInput) : undefined
+    );
     confetti({
       particleCount: 50,
       spread: 60,
@@ -143,6 +152,7 @@ export const ParentDashboard: React.FC = () => {
     });
     setApprovingId(null);
     setBonusInput(0);
+    setCustomRewardInput(50);
     setParentCommentInput('');
   };
 
@@ -580,8 +590,21 @@ export const ParentDashboard: React.FC = () => {
                     >
                       <div className="flex justify-between items-start">
                         <div>
-                          <h4 className="font-bold text-slate-800 text-sm">{req.title}</h4>
-                          <p className="text-indigo-600 font-extrabold text-xs">+{req.reward} 円</p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <h4 className="font-bold text-slate-800 text-sm">{req.title}</h4>
+                            {req.choreId === 'custom' && (
+                              <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full border border-amber-200">
+                                ✨ 自由入力
+                              </span>
+                            )}
+                          </div>
+                          {req.choreId === 'custom' ? (
+                            <p className="text-amber-600 font-bold text-xs mt-0.5">
+                              承認時に金額を決定します
+                            </p>
+                          ) : (
+                            <p className="text-indigo-600 font-extrabold text-xs">+{req.reward} 円</p>
+                          )}
                           {req.comment && (
                             <p className="text-xs text-slate-500 mt-1 bg-white px-2.5 py-1 rounded-lg border border-slate-100">
                               こども: 「{req.comment}」
@@ -1432,21 +1455,52 @@ export const ParentDashboard: React.FC = () => {
       {approvingId && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4">
-            <h3 className="font-bold text-base text-slate-800">お手伝いの承認</h3>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">
-                  ボーナス加算（任意、円）
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  value={bonusInput}
-                  onChange={(e) => setBonusInput(Number(e.target.value))}
-                  className="w-full px-3 py-2 border rounded-xl text-sm"
-                  placeholder="0"
-                />
+            <h3 className="font-bold text-base text-slate-800">
+              {approvingReq?.choreId === 'custom' ? '自由入力お手伝いの承認' : 'お手伝いの承認'}
+            </h3>
+            {approvingReq && (
+              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 text-xs">
+                <p className="text-[10px] text-slate-400 font-bold mb-0.5">申請された内容</p>
+                <p className="font-bold text-slate-800">{approvingReq.title}</p>
+                {approvingReq.comment && (
+                  <p className="text-slate-500 mt-1">「{approvingReq.comment}」</p>
+                )}
               </div>
+            )}
+            <div className="space-y-3">
+              {approvingReq?.choreId === 'custom' ? (
+                <div>
+                  <label className="block text-xs font-bold text-indigo-700 mb-1">
+                    あげるご褒美の金額（円） <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    required
+                    value={customRewardInput}
+                    onChange={(e) => setCustomRewardInput(Number(e.target.value))}
+                    className="w-full px-3 py-2 border-2 border-indigo-200 rounded-xl text-sm font-bold focus:border-indigo-500 focus:outline-none"
+                    placeholder="例: 50"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    ※ 承認するとこの金額が子どもの残高にプラスされます。
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">
+                    ボーナス加算（任意、円）
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={bonusInput}
+                    onChange={(e) => setBonusInput(Number(e.target.value))}
+                    className="w-full px-3 py-2 border rounded-xl text-sm"
+                    placeholder="0"
+                  />
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-slate-500 mb-1">
                   ほめ言葉・メッセージ（任意）

@@ -23,7 +23,8 @@ import {
   Check,
   Flame,
   AlertTriangle,
-  Type
+  Type,
+  Edit3
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -47,6 +48,7 @@ export const ChildDashboard: React.FC = () => {
     fontSize,
     setFontSize,
     submitChoreRequest,
+    submitCustomChoreRequest,
     reportRoutineDone,
     checkAndApplyOverduePenalties,
     logout,
@@ -56,6 +58,9 @@ export const ChildDashboard: React.FC = () => {
 
   const [selectedChoreId, setSelectedChoreId] = useState<string | null>(null);
   const [comment, setComment] = useState('');
+  const [customChoreTitle, setCustomChoreTitle] = useState('');
+  const [customChoreComment, setCustomChoreComment] = useState('');
+  const [isCustomMode, setIsCustomMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [reportingRoutineId, setReportingRoutineId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'home' | 'apply' | 'calendar'>('home');
@@ -114,6 +119,23 @@ export const ChildDashboard: React.FC = () => {
     setComment('');
 
     // 申請時のお祝い紙吹雪
+    confetti({
+      particleCount: 60,
+      spread: 60,
+      origin: { y: 0.7 },
+    });
+    setActiveTab('home');
+  };
+
+  const handleCustomApply = async () => {
+    if (!customChoreTitle.trim()) return;
+    setSubmitting(true);
+    await submitCustomChoreRequest(customChoreTitle.trim(), customChoreComment.trim());
+    setSubmitting(false);
+    setCustomChoreTitle('');
+    setCustomChoreComment('');
+    setIsCustomMode(false);
+
     confetti({
       particleCount: 60,
       spread: 60,
@@ -457,52 +479,136 @@ export const ChildDashboard: React.FC = () => {
         {/* --- タブ2: お手伝い申請 --- */}
         {activeTab === 'apply' && (
           <div className="space-y-4">
-            <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
-              <h3 className="font-bold text-slate-800 text-sm mb-1">今日やったお手伝いを選んでね！</h3>
-              <p className="text-xs text-slate-500 mb-4">選んだら「申請する」ボタンを押してね。</p>
-
-              <div className="grid grid-cols-2 gap-3 mb-5">
-                {chores.map((chore) => {
-                  const isSelected = selectedChoreId === chore.id;
-                  return (
-                    <button
-                      key={chore.id}
-                      onClick={() => setSelectedChoreId(chore.id)}
-                      className={`p-3.5 rounded-2xl border text-left flex flex-col justify-between transition-all ${
-                        isSelected
-                          ? 'border-amber-500 bg-amber-50 ring-2 ring-amber-400 shadow-md'
-                          : 'border-slate-100 bg-slate-50 hover:bg-slate-100'
-                      }`}
-                    >
-                      <div className="p-2 rounded-xl bg-white w-fit shadow-xs text-amber-500 mb-2">
-                        {ICON_MAP[chore.icon] || <Sparkles className="w-6 h-6" />}
-                      </div>
-                      <div>
-                        <p className="font-bold text-xs text-slate-800 leading-tight mb-1">{chore.title}</p>
-                        <p className="text-sm font-black text-amber-600">+{chore.reward}円</p>
-                      </div>
-                    </button>
-                  );
-                })}
+            <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
+              {/* 一覧から選ぶ / じぶんで入力する タブ切替 */}
+              <div className="flex bg-slate-100 p-1 rounded-2xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCustomMode(false);
+                  }}
+                  className={`flex-1 py-2 text-xs font-bold rounded-xl transition ${
+                    !isCustomMode
+                      ? 'bg-white text-amber-600 shadow-xs'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  一覧からえらぶ
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCustomMode(true);
+                    setSelectedChoreId(null);
+                  }}
+                  className={`flex-1 py-2 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1 ${
+                    isCustomMode
+                      ? 'bg-white text-amber-600 shadow-xs'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  自分で入力する
+                </button>
               </div>
 
-              {selectedChoreId && (
-                <div className="space-y-3 pt-3 border-t border-slate-100">
-                  <label className="block text-xs font-bold text-slate-600">ひとことメッセージ（なくてもOK）</label>
-                  <input
-                    type="text"
-                    value={comment}
-                    onChange={(e) => setComment(e.target.value)}
-                    placeholder="例: ピカピカにできたよ！"
-                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  />
+              {!isCustomMode ? (
+                <>
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-sm mb-1">今日やったお手伝いを選んでね！</h3>
+                    <p className="text-xs text-slate-500">選んだら「申請する」ボタンを押してね。</p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 mb-2">
+                    {chores.map((chore) => {
+                      const isSelected = selectedChoreId === chore.id;
+                      return (
+                        <button
+                          key={chore.id}
+                          onClick={() => setSelectedChoreId(chore.id)}
+                          className={`p-3.5 rounded-2xl border text-left flex flex-col justify-between transition-all ${
+                            isSelected
+                              ? 'border-amber-500 bg-amber-50 ring-2 ring-amber-400 shadow-md'
+                              : 'border-slate-100 bg-slate-50 hover:bg-slate-100'
+                          }`}
+                        >
+                          <div className="p-2 rounded-xl bg-white w-fit shadow-xs text-amber-500 mb-2">
+                            {ICON_MAP[chore.icon] || <Sparkles className="w-6 h-6" />}
+                          </div>
+                          <div>
+                            <p className="font-bold text-xs text-slate-800 leading-tight mb-1">{chore.title}</p>
+                            <p className="text-sm font-black text-amber-600">+{chore.reward}円</p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {selectedChoreId && (
+                    <div className="space-y-3 pt-3 border-t border-slate-100">
+                      <label className="block text-xs font-bold text-slate-600">ひとことメッセージ（なくてもOK）</label>
+                      <input
+                        type="text"
+                        value={comment}
+                        onChange={(e) => setComment(e.target.value)}
+                        placeholder="例: ピカピカにできたよ！"
+                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
+                      />
+                      <button
+                        onClick={handleApply}
+                        disabled={submitting}
+                        className="w-full py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-black text-sm shadow-lg shadow-amber-200 transition flex items-center justify-center gap-2"
+                      >
+                        <Send className="w-4 h-4" />
+                        {submitting ? '申請中...' : 'お父さん・お母さんに申請する！'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                /* 自由入力フォーム（マスターにないお手伝い） */
+                <div className="space-y-4">
+                  <div className="p-3 bg-amber-50/70 rounded-2xl border border-amber-100 text-xs text-amber-800">
+                    <p className="font-bold">✨ 一覧にない特別なお手伝いをしたよ！</p>
+                    <p className="text-[11px] text-amber-700 mt-0.5">
+                      何をしたかを書いて申請してね。もらえる金額はお父さん・お母さんが確認して決めてくれるよ！
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      やったお手伝い・がんばったこと <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={customChoreTitle}
+                      onChange={(e) => setCustomChoreTitle(e.target.value)}
+                      placeholder="例: 自転車をきれいに洗った、弟の宿題を教えてあげた"
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      ひとことメッセージ（アピールしよう！）
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={customChoreComment}
+                      onChange={(e) => setCustomChoreComment(e.target.value)}
+                      placeholder="例: サドルもチェーンもピカピカにしたよ！"
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    />
+                  </div>
+
                   <button
-                    onClick={handleApply}
-                    disabled={submitting}
-                    className="w-full py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-black text-sm shadow-lg shadow-amber-200 transition flex items-center justify-center gap-2"
+                    onClick={handleCustomApply}
+                    disabled={submitting || !customChoreTitle.trim()}
+                    className="w-full py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-600 disabled:opacity-50 active:scale-95 text-white font-black text-sm shadow-lg shadow-amber-200 transition flex items-center justify-center gap-2"
                   >
                     <Send className="w-4 h-4" />
-                    {submitting ? '申請中...' : 'お父さん・お母さんに申請する！'}
+                    {submitting ? '申請中...' : 'このお手伝いを申請する！'}
                   </button>
                 </div>
               )}

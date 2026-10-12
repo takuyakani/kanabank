@@ -56,7 +56,8 @@ interface AppContextType {
   logout: () => Promise<void>;
   updateGoal: (title: string, amount: number) => Promise<{ success: boolean; error?: string }>;
   submitChoreRequest: (choreId: string, comment?: string) => Promise<void>;
-  approveRequest: (requestId: string, bonus?: number, parentComment?: string) => Promise<void>;
+  submitCustomChoreRequest: (title: string, comment?: string) => Promise<void>;
+  approveRequest: (requestId: string, bonus?: number, parentComment?: string, customReward?: number) => Promise<void>;
   rejectRequest: (requestId: string, parentComment?: string) => Promise<void>;
   addPenalty: (title: string, amount: number, note?: string) => Promise<{ success: boolean; error?: string }>;
   addSpend: (title: string, amount: number, note?: string) => Promise<{ success: boolean; error?: string }>;
@@ -464,13 +465,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // マスターにないお手伝いの申請（自由入力）
+  const submitCustomChoreRequest = async (title: string, comment: string = '') => {
+    if (!title.trim()) return;
+
+    const newReq: ChoreRequest = {
+      id: `req-${Date.now()}`,
+      choreId: 'custom',
+      title: title.trim(),
+      reward: 0, // 親が承認時に決定
+      bonus: 0,
+      status: 'pending',
+      requestedAt: new Date().toISOString(),
+      comment: comment.trim(),
+    };
+
+    const nextRequests = [newReq, ...requests];
+    setRequests(nextRequests);
+    broadcastAndSaveLocalData(undefined, undefined, nextRequests);
+
+    if (isFirebaseConfigured && db) {
+      await setDoc(doc(db, 'requests', newReq.id), newReq);
+    }
+  };
+
   // 申請承認
-  const approveRequest = async (requestId: string, bonus: number = 0, parentComment: string = '') => {
+  const approveRequest = async (
+    requestId: string,
+    bonus: number = 0,
+    parentComment: string = '',
+    customReward?: number
+  ) => {
     const req = requests.find((r) => r.id === requestId);
     if (!req || req.status !== 'pending') return;
 
+    // 自由入力お手伝い（req.choreId === 'custom'）の場合は親が設定した customReward を基本報酬とする
+    const baseReward =
+      req.choreId === 'custom' && customReward !== undefined
+        ? Math.max(0, Math.floor(customReward))
+        : req.reward;
+
     const safeBonus = Math.max(0, Math.floor(bonus));
-    const totalEarned = req.reward + safeBonus;
+    const totalEarned = baseReward + safeBonus;
     const nowIso = new Date().toISOString();
     const todayDate = nowIso.split('T')[0];
 
@@ -478,6 +514,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const updatedReq: ChoreRequest = {
       ...req,
+      reward: baseReward,
       status: 'approved',
       bonus: safeBonus,
       processedAt: nowIso,
@@ -509,6 +546,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (isFirebaseConfigured && db) {
       await updateDoc(doc(db, 'requests', req.id), {
+        reward: baseReward,
         status: 'approved',
         bonus: safeBonus,
         processedAt: nowIso,
@@ -877,6 +915,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logout,
         updateGoal,
         submitChoreRequest,
+        submitCustomChoreRequest,
         approveRequest,
         rejectRequest,
         addPenalty,
