@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { CalendarView } from '../components/CalendarView';
+import { HistorySearchView } from '../components/HistorySearchView';
 import { isTaskScheduledForDate } from '../utils/scheduleUtils';
 import type { FontSizePreference } from '../types';
 import {
@@ -24,7 +25,8 @@ import {
   Flame,
   AlertTriangle,
   Type,
-  Edit3
+  Edit3,
+  Search
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -64,6 +66,7 @@ export const ChildDashboard: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [reportingRoutineId, setReportingRoutineId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'home' | 'apply' | 'calendar'>('home');
+  const [historySubTab, setHistorySubTab] = useState<'calendar' | 'search'>('calendar');
 
   // アプリ起動・画面表示時に期限切れペナルティを自動判定
   useEffect(() => {
@@ -616,10 +619,42 @@ export const ChildDashboard: React.FC = () => {
           </div>
         )}
 
-        {/* --- タブ3: カレンダー --- */}
+        {/* --- タブ3: カレンダー・履歴 --- */}
         {activeTab === 'calendar' && (
           <div className="space-y-4">
-            <CalendarView transactions={transactions} />
+            {/* カレンダー表示 / 履歴検索 切り替えボタン */}
+            <div className="flex bg-amber-100/70 p-1 rounded-2xl">
+              <button
+                type="button"
+                onClick={() => setHistorySubTab('calendar')}
+                className={`flex-1 py-2 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 ${
+                  historySubTab === 'calendar'
+                    ? 'bg-white text-amber-800 shadow-xs'
+                    : 'text-amber-900/70 hover:text-amber-950'
+                }`}
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                カレンダー
+              </button>
+              <button
+                type="button"
+                onClick={() => setHistorySubTab('search')}
+                className={`flex-1 py-2 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 ${
+                  historySubTab === 'search'
+                    ? 'bg-white text-amber-800 shadow-xs'
+                    : 'text-amber-900/70 hover:text-amber-950'
+                }`}
+              >
+                <Search className="w-3.5 h-3.5" />
+                さがす（検索）
+              </button>
+            </div>
+
+            {historySubTab === 'calendar' ? (
+              <CalendarView transactions={transactions} />
+            ) : (
+              <HistorySearchView transactions={transactions} variant="child" />
+            )}
           </div>
         )}
       </main>

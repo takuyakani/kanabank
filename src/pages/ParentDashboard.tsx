@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { CalendarView } from '../components/CalendarView';
+import { HistorySearchView } from '../components/HistorySearchView';
 import {
   saveFirebaseConfig,
   clearFirebaseConfig,
@@ -27,7 +28,8 @@ import {
   HardDrive,
   Gift,
   Trophy,
-  CheckSquare
+  CheckSquare,
+  Search
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -60,7 +62,8 @@ export const ParentDashboard: React.FC = () => {
     logout,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'approvals' | 'routines' | 'penalty' | 'spend' | 'chores' | 'calendar' | 'settings'>('approvals');
+  const [activeTab, setActiveTab] = useState<'approvals' | 'routines' | 'penalty' | 'spend' | 'chores' | 'calendar' | 'search' | 'settings'>('approvals');
+  const [historySubTab, setHistorySubTab] = useState<'calendar' | 'search'>('calendar');
 
   // 親からの目標編集モーダル
   const [isEditingGoal, setIsEditingGoal] = useState(false);
@@ -940,9 +943,37 @@ export const ParentDashboard: React.FC = () => {
           </div>
         )}
 
-        {/* --- タブ6: カレンダー --- */}
+        {/* --- タブ6: 履歴（カレンダー / 検索） --- */}
         {activeTab === 'calendar' && (
           <div className="space-y-4">
+            {/* カレンダー表示 / 検索表示 切り替えボタン */}
+            <div className="flex bg-slate-200/80 p-1 rounded-2xl">
+              <button
+                type="button"
+                onClick={() => setHistorySubTab('calendar')}
+                className={`flex-1 py-2 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 ${
+                  historySubTab === 'calendar'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                カレンダー表示
+              </button>
+              <button
+                type="button"
+                onClick={() => setHistorySubTab('search')}
+                className={`flex-1 py-2 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 ${
+                  historySubTab === 'search'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Search className="w-3.5 h-3.5" />
+                履歴を検索する
+              </button>
+            </div>
+
             {clearHistorySuccess && (
               <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-2xl font-bold flex items-center gap-2 shadow-xs">
                 <Check className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -950,7 +981,11 @@ export const ParentDashboard: React.FC = () => {
               </div>
             )}
 
-            <CalendarView transactions={transactions} />
+            {historySubTab === 'calendar' ? (
+              <CalendarView transactions={transactions} />
+            ) : (
+              <HistorySearchView transactions={transactions} variant="parent" />
+            )}
 
             {/* 履歴の管理・全削除カード */}
             <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
