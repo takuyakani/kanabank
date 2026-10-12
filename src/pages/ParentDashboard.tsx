@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { CalendarView } from '../components/CalendarView';
 import { HistorySearchView } from '../components/HistorySearchView';
@@ -8,7 +8,7 @@ import {
   getSavedFirebaseConfig,
   type FirebaseCustomConfig
 } from '../lib/firebase';
-import type { ChoreMaster, RoutineTask, ScheduleType } from '../types';
+import type { ChoreMaster, RoutineTask, RoutineLog, ScheduleType } from '../types';
 import { formatScheduleDescription } from '../utils/scheduleUtils';
 import {
   Check,
@@ -31,7 +31,10 @@ import {
   CheckSquare,
   Search,
   Coins,
-  AlertCircle
+  AlertCircle,
+  Download,
+  Banknote,
+  ShieldAlert
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -87,10 +90,12 @@ export const ParentDashboard: React.FC = () => {
   const [penaltyAmount, setPenaltyAmount] = useState<number>(50);
   const [penaltySuccess, setPenaltySuccess] = useState(false);
   const [penaltyError, setPenaltyError] = useState('');
+  const [showPenaltyConfirm, setShowPenaltyConfirm] = useState(false);
 
   // お小遣い使用フォーム
   const [spendTitle, setSpendTitle] = useState('');
   const [spendAmount, setSpendAmount] = useState<number>(100);
+  const [spendMethod, setSpendMethod] = useState<'cash' | 'virtual'>('cash');
   const [spendSuccess, setSpendSuccess] = useState(false);
   const [spendError, setSpendError] = useState('');
 
@@ -105,6 +110,8 @@ export const ParentDashboard: React.FC = () => {
 
   // お手伝いマスター削除確認モーダル
   const [deletingChore, setDeletingChore] = useState<ChoreMaster | null>(null);
+  const [isSavingChore, setIsSavingChore] = useState(false);
+  const [isDeletingChore, setIsDeletingChore] = useState(false);
 
   // ルーティン編集モーダル
   const [isEditingRoutine, setIsEditingRoutine] = useState(false);
@@ -121,12 +128,16 @@ export const ParentDashboard: React.FC = () => {
   const [routineNthWeek, setRoutineNthWeek] = useState<number>(1);
   const [routineNthWeekday, setRoutineNthWeekday] = useState<number>(1);
   const [deletingRoutine, setDeletingRoutine] = useState<RoutineTask | null>(null);
+  const [isSavingRoutine, setIsSavingRoutine] = useState(false);
+  const [isDeletingRoutine, setIsDeletingRoutine] = useState(false);
 
   // 申請承認モーダル（ボーナス・コメント・自由入力報酬用）
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [customRewardInput, setCustomRewardInput] = useState<number>(50);
   const [bonusInput, setBonusInput] = useState(0);
   const [parentCommentInput, setParentCommentInput] = useState('');
+  const [approveSuccessToast, setApproveSuccessToast] = useState<string | null>(null);
+  const [approvingRoutineLogId, setApprovingRoutineLogId] = useState<string | null>(null);
 
   // 目標達成引き換え
   const [goalRedeemSuccess, setGoalRedeemSuccess] = useState(false);
@@ -136,6 +147,26 @@ export const ParentDashboard: React.FC = () => {
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [isClearingHistory, setIsClearingHistory] = useState(false);
   const [clearHistorySuccess, setClearHistorySuccess] = useState(false);
+  const [backupDownloaded, setBackupDownloaded] = useState(false);
+
+  // 全モーダルのESCキー閉じハンドリング
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsEditingBalance(false);
+        setIsEditingGoal(false);
+        setIsEditingChore(false);
+        setDeletingChore(null);
+        setIsEditingRoutine(false);
+        setDeletingRoutine(null);
+        setApprovingId(null);
+        setShowPenaltyConfirm(false);
+        setShowClearHistoryConfirm(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // クラウド手動設定
   const currentSavedConfig = getSavedFirebaseConfig();
@@ -149,9 +180,47 @@ export const ParentDashboard: React.FC = () => {
 
   const approvingReq = requests.find((r) => r.id === approvingId);
 
+  // JSONバックアップダウンロード
+  const handleDownloadBackup = () => {
+    try {
+      const backupData = {
+        exportedAt: new Date().toISOString(),
+        version: '1.0',
+        household,
+        transactions,
+        chores,
+        routines,
+        requests,
+        routineLogs,
+      };
+      const jsonStr = JSON.stringify(backupData, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const now = new Date();
+      const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+      a.href = url;
+      a.download = `kanabank_backup_${dateStr}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setBackupDownloaded(true);
+      setTimeout(() => setBackupDownloaded(false), 5000);
+    } catch (err) {
+      console.error('バックアップ出力エラー:', err);
+    }
+  };
+
   const handleApprove = async () => {
-    if (!approvingId) return;
-    const isCustom = approvingReq?.choreId === 'custom';
+    if (!approvingId || !approvingReq) return;
+    const isCustom = approvingReq.choreId === 'custom';
+    const rewardToGive = isCustom ? Number(customRewardInput) : (approvingReq.reward + Number(bonusInput));
+    
+    if (isCustom && (isNaN(Number(customRewardInput)) || Number(customRewardInput) < 0)) {
+      return;
+    }
+
     await approveRequest(
       approvingId,
       Number(bonusInput),
@@ -163,6 +232,9 @@ export const ParentDashboard: React.FC = () => {
       spread: 60,
       origin: { y: 0.6 },
     });
+    setApproveSuccessToast(`「${approvingReq.title}」を承認し、${rewardToGive}円を反映しました！`);
+    setTimeout(() => setApproveSuccessToast(null), 3500);
+
     setApprovingId(null);
     setBonusInput(0);
     setCustomRewardInput(50);
@@ -173,6 +245,30 @@ export const ParentDashboard: React.FC = () => {
     const reason = window.prompt('やり直し・却下の理由（省略可）', '');
     if (reason !== null) {
       await rejectRequest(id, reason);
+    }
+  };
+
+  const handleApproveRoutine = async (log: RoutineLog) => {
+    setApprovingRoutineLogId(log.id);
+    try {
+      const res = await approveRoutineLog(log.id);
+      if (res && !res.success) {
+        alert(res.error || '承認に失敗しました');
+        return;
+      }
+      confetti({
+        particleCount: 50,
+        spread: 60,
+        origin: { y: 0.6 },
+      });
+      setApproveSuccessToast(
+        `「いつもやること: ${log.title}」を承認しました！${log.reward > 0 ? ` (+${log.reward}円)` : ''}`
+      );
+      setTimeout(() => setApproveSuccessToast(null), 3500);
+    } catch (err) {
+      console.error('いつもやること承認エラー:', err);
+    } finally {
+      setApprovingRoutineLogId(null);
     }
   };
 
@@ -206,7 +302,7 @@ export const ParentDashboard: React.FC = () => {
     setTimeout(() => setGoalSuccess(false), 3000);
   };
 
-  const handlePenaltySubmit = async (e: React.FormEvent) => {
+  const handlePenaltySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setPenaltyError('');
 
@@ -219,6 +315,11 @@ export const ParentDashboard: React.FC = () => {
       return;
     }
 
+    setShowPenaltyConfirm(true);
+  };
+
+  const confirmExecutePenalty = async () => {
+    setShowPenaltyConfirm(false);
     const res = await addPenalty(penaltyReason, penaltyAmount);
     if (!res.success) {
       setPenaltyError(res.error || '減額の登録に失敗しました。');
@@ -242,7 +343,7 @@ export const ParentDashboard: React.FC = () => {
       return;
     }
 
-    const res = await addSpend(spendTitle, spendAmount);
+    const res = await addSpend(spendTitle, spendAmount, '', spendMethod);
     if (!res.success) {
       setSpendError(res.error || '出金の登録に失敗しました。');
       return;
@@ -270,73 +371,113 @@ export const ParentDashboard: React.FC = () => {
 
   const handleSaveChore = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingChoreData.title || !editingChoreData.reward) return;
+    if (!editingChoreData.title?.trim() || !editingChoreData.reward) return;
+    if (isSavingChore) return;
 
-    if (editingChoreData.id) {
-      await updateChoreMaster(editingChoreData as ChoreMaster);
-    } else {
-      await addChoreMaster({
-        title: editingChoreData.title,
-        reward: Number(editingChoreData.reward),
-        icon: editingChoreData.icon || 'sparkles',
-        description: editingChoreData.description,
+    setIsSavingChore(true);
+    try {
+      if (editingChoreData.id) {
+        await updateChoreMaster(editingChoreData as ChoreMaster);
+      } else {
+        await addChoreMaster({
+          title: editingChoreData.title.trim(),
+          reward: Number(editingChoreData.reward),
+          icon: editingChoreData.icon || 'sparkles',
+          description: editingChoreData.description?.trim(),
+        });
+      }
+      setIsEditingChore(false);
+      setEditingChoreData({
+        title: '',
+        reward: 30,
+        icon: 'sparkles',
+        description: '',
       });
+    } catch (err) {
+      console.error('お手伝い保存エラー:', err);
+      // 万が一エラーが起きてもモーダルを閉じ、二重登録を防止
+      setIsEditingChore(false);
+    } finally {
+      setIsSavingChore(false);
     }
-    setIsEditingChore(false);
   };
 
   const handleSaveRoutine = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingRoutineData.title?.trim()) return;
+    if (!editingRoutineData.title?.trim() || isSavingRoutine) return;
 
-    const schedType = (editingRoutineData.scheduleType || 'daily') as ScheduleType;
-    let configObj: RoutineTask['scheduleConfig'] = undefined;
+    setIsSavingRoutine(true);
+    try {
+      const schedType = (editingRoutineData.scheduleType || 'daily') as ScheduleType;
+      let configObj: RoutineTask['scheduleConfig'] = undefined;
 
-    if (schedType === 'weekly_days') {
-      configObj = { daysOfWeek: routineDaysOfWeek };
-    } else if (schedType === 'monthly_date') {
-      configObj = { dayOfMonth: routineDayOfMonth };
-    } else if (schedType === 'monthly_nth_weekday') {
-      configObj = { nthWeek: routineNthWeek, nthWeekday: routineNthWeekday };
+      if (schedType === 'weekly_days') {
+        configObj = { daysOfWeek: routineDaysOfWeek };
+      } else if (schedType === 'monthly_date') {
+        configObj = { dayOfMonth: routineDayOfMonth };
+      } else if (schedType === 'monthly_nth_weekday') {
+        configObj = { nthWeek: routineNthWeek, nthWeekday: routineNthWeekday };
+      }
+
+      if (editingRoutineData.id) {
+        await updateRoutine({
+          ...(editingRoutineData as RoutineTask),
+          title: editingRoutineData.title.trim(),
+          reward: Number(editingRoutineData.reward || 0),
+          penaltyAmount: Number(editingRoutineData.penaltyAmount || 0),
+          graceDays: Number(editingRoutineData.graceDays || 0),
+          scheduleType: schedType,
+          scheduleConfig: configObj,
+          active: editingRoutineData.active ?? true,
+        });
+      } else {
+        await addRoutine({
+          title: editingRoutineData.title.trim(),
+          reward: Number(editingRoutineData.reward || 0),
+          penaltyAmount: Number(editingRoutineData.penaltyAmount || 0),
+          graceDays: Number(editingRoutineData.graceDays || 0),
+          scheduleType: schedType,
+          scheduleConfig: configObj,
+          active: true,
+        });
+      }
+      setIsEditingRoutine(false);
+      setRoutineSavedSuccess(true);
+      setTimeout(() => setRoutineSavedSuccess(false), 3000);
+    } catch (err) {
+      console.error('ルーティン保存エラー:', err);
+      setIsEditingRoutine(false);
+    } finally {
+      setIsSavingRoutine(false);
     }
-
-    if (editingRoutineData.id) {
-      await updateRoutine({
-        ...(editingRoutineData as RoutineTask),
-        title: editingRoutineData.title.trim(),
-        reward: Number(editingRoutineData.reward || 0),
-        penaltyAmount: Number(editingRoutineData.penaltyAmount || 0),
-        graceDays: Number(editingRoutineData.graceDays || 0),
-        scheduleType: schedType,
-        scheduleConfig: configObj,
-        active: editingRoutineData.active ?? true,
-      });
-    } else {
-      await addRoutine({
-        title: editingRoutineData.title.trim(),
-        reward: Number(editingRoutineData.reward || 0),
-        penaltyAmount: Number(editingRoutineData.penaltyAmount || 0),
-        graceDays: Number(editingRoutineData.graceDays || 0),
-        scheduleType: schedType,
-        scheduleConfig: configObj,
-        active: true,
-      });
-    }
-    setIsEditingRoutine(false);
-    setRoutineSavedSuccess(true);
-    setTimeout(() => setRoutineSavedSuccess(false), 3000);
   };
 
   const confirmDeleteChore = async () => {
-    if (!deletingChore) return;
-    await deleteChoreMaster(deletingChore.id);
-    setDeletingChore(null);
+    if (!deletingChore || isDeletingChore) return;
+    setIsDeletingChore(true);
+    try {
+      await deleteChoreMaster(deletingChore.id);
+      setDeletingChore(null);
+    } catch (err) {
+      console.error('お手伝い削除エラー:', err);
+      setDeletingChore(null);
+    } finally {
+      setIsDeletingChore(false);
+    }
   };
 
   const confirmDeleteRoutine = async () => {
-    if (!deletingRoutine) return;
-    await deleteRoutine(deletingRoutine.id);
-    setDeletingRoutine(null);
+    if (!deletingRoutine || isDeletingRoutine) return;
+    setIsDeletingRoutine(true);
+    try {
+      await deleteRoutine(deletingRoutine.id);
+      setDeletingRoutine(null);
+    } catch (err) {
+      console.error('ルーティン削除エラー:', err);
+      setDeletingRoutine(null);
+    } finally {
+      setIsDeletingRoutine(false);
+    }
   };
 
   const [routineSavedSuccess, setRoutineSavedSuccess] = useState(false);
@@ -488,6 +629,33 @@ export const ParentDashboard: React.FC = () => {
 
       {/* メインコンテンツ */}
       <main className="p-4 space-y-4 flex-1">
+        {/* クラウド未設定・ローカル保存モードの案内バナー */}
+        {isDemoMode && activeTab !== 'settings' && (
+          <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-2xl text-xs text-amber-900 flex items-center justify-between gap-2 shadow-xs">
+            <div className="flex items-center gap-2">
+              <HardDrive className="w-4 h-4 text-amber-600 shrink-0" />
+              <div>
+                <p className="font-bold text-[11px] leading-tight">現在は端末内のローカル保存で動作しています</p>
+                <p className="text-[10px] text-amber-700 mt-0.5">複数端末でデータを共有するにはクラウド設定が必要です</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setActiveTab('settings')}
+              className="px-2.5 py-1 bg-amber-200/70 hover:bg-amber-200 text-amber-900 font-bold text-[10px] rounded-lg transition shrink-0"
+            >
+              設定を見る
+            </button>
+          </div>
+        )}
+
+        {/* お手伝い承認完了トースト通知 */}
+        {approveSuccessToast && (
+          <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-2xl font-bold flex items-center gap-2 shadow-sm animate-fade-in">
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{approveSuccessToast}</span>
+          </div>
+        )}
+
         {/* 親からの残高確認＆直接編集カード */}
         <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -629,10 +797,12 @@ export const ParentDashboard: React.FC = () => {
                         </div>
                       </div>
                       <button
-                        onClick={() => approveRoutineLog(log.id)}
-                        className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition shrink-0 ml-2 flex items-center gap-1"
+                        onClick={() => handleApproveRoutine(log)}
+                        disabled={approvingRoutineLogId === log.id}
+                        className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs transition shrink-0 ml-2 flex items-center gap-1 cursor-pointer"
                       >
-                        <Check className="w-3.5 h-3.5" /> 承認
+                        <Check className="w-3.5 h-3.5" />
+                        {approvingRoutineLogId === log.id ? '承認中...' : '承認'}
                       </button>
                     </div>
                   ))}
@@ -689,6 +859,7 @@ export const ParentDashboard: React.FC = () => {
                           onClick={() => {
                             setApprovingId(req.id);
                             setBonusInput(0);
+                            setCustomRewardInput(req.requestedReward || 50);
                             setParentCommentInput('');
                           }}
                           className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition flex items-center justify-center gap-1 shadow-sm"
@@ -939,6 +1110,39 @@ export const ParentDashboard: React.FC = () => {
                 {spendAmount > household.balance && (
                   <p className="text-[11px] text-rose-600 font-semibold mt-1">残高を超えています。</p>
                 )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">出金の方法・渡し方</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSpendMethod('cash')}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition ${
+                      spendMethod === 'cash'
+                        ? 'border-indigo-600 bg-indigo-50 text-indigo-700 ring-2 ring-indigo-200'
+                        : 'border-slate-200 bg-slate-50 text-slate-600'
+                    }`}
+                  >
+                    <Banknote className="w-3.5 h-3.5" />
+                    <span>現金を渡した</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSpendMethod('virtual')}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition ${
+                      spendMethod === 'virtual'
+                        ? 'border-indigo-600 bg-indigo-50 text-indigo-700 ring-2 ring-indigo-200'
+                        : 'border-slate-200 bg-slate-50 text-slate-600'
+                    }`}
+                  >
+                    <Coins className="w-3.5 h-3.5" />
+                    <span>バーチャル残高のみ</span>
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  ※親が代わりにオンライン等で購入した場合は「バーチャル残高のみ」を選択できます。
+                </p>
               </div>
 
               <button
@@ -1247,10 +1451,24 @@ export const ParentDashboard: React.FC = () => {
 
       {/* 残高直接編集モーダル（親用） */}
       {isEditingBalance && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4">
-            <div className="flex items-center gap-2 text-indigo-900">
-              <Coins className="w-5 h-5 text-indigo-600" />
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsEditingBalance(false);
+          }}
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 relative max-h-[85vh] overflow-y-auto my-auto">
+            <button
+              type="button"
+              onClick={() => setIsEditingBalance(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-2 text-indigo-900 pr-6">
+              <Coins className="w-5 h-5 text-indigo-600 shrink-0" />
               <h3 className="font-bold text-base">残高の直接変更</h3>
             </div>
             <p className="text-xs text-slate-500 leading-relaxed">
@@ -1318,9 +1536,23 @@ export const ParentDashboard: React.FC = () => {
 
       {/* 目標編集モーダル（親用） */}
       {isEditingGoal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4">
-            <h3 className="font-bold text-base text-slate-800">子どもの目標を設定する</h3>
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsEditingGoal(false);
+          }}
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 relative max-h-[85vh] overflow-y-auto my-auto">
+            <button
+              type="button"
+              onClick={() => setIsEditingGoal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="font-bold text-base text-slate-800 pr-6">子どもの目標を設定する</h3>
             {goalError && (
               <div className="p-2.5 bg-rose-50 text-rose-600 text-xs rounded-xl flex items-center gap-1.5">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -1372,9 +1604,23 @@ export const ParentDashboard: React.FC = () => {
 
       {/* ルーティン編集モーダル */}
       {isEditingRoutine && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4 my-8">
-            <h3 className="font-bold text-base text-slate-800">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsEditingRoutine(false);
+          }}
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4 my-8 relative max-h-[85vh] overflow-y-auto">
+            <button
+              type="button"
+              onClick={() => setIsEditingRoutine(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="font-bold text-base text-slate-800 pr-6">
               {editingRoutineData.id ? '「いつもやること」の編集' : '新しい「いつもやること」を作成'}
             </h3>
             <form onSubmit={handleSaveRoutine} className="space-y-3 text-xs">
@@ -1540,16 +1786,18 @@ export const ParentDashboard: React.FC = () => {
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
+                  disabled={isSavingRoutine}
                   onClick={() => setIsEditingRoutine(false)}
-                  className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold"
+                  className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold hover:bg-slate-200 transition disabled:opacity-50"
                 >
                   キャンセル
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-bold shadow-md shadow-indigo-200"
+                  disabled={isSavingRoutine}
+                  className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold shadow-md shadow-indigo-200 transition disabled:opacity-50 flex items-center justify-center gap-1"
                 >
-                  保存する
+                  {isSavingRoutine ? '保存中...' : '保存する'}
                 </button>
               </div>
             </form>
@@ -1559,8 +1807,22 @@ export const ParentDashboard: React.FC = () => {
 
       {/* ルーティン削除確認モーダル */}
       {deletingRoutine && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDeletingRoutine(null);
+          }}
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center relative max-h-[85vh] overflow-y-auto my-auto">
+            <button
+              type="button"
+              onClick={() => setDeletingRoutine(null)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
             <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
               <Trash2 className="w-6 h-6" />
             </div>
@@ -1571,17 +1833,19 @@ export const ParentDashboard: React.FC = () => {
             <div className="flex gap-2 pt-2">
               <button
                 type="button"
+                disabled={isDeletingRoutine}
                 onClick={() => setDeletingRoutine(null)}
-                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold"
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition disabled:opacity-50"
               >
                 キャンセル
               </button>
               <button
                 type="button"
+                disabled={isDeletingRoutine}
                 onClick={confirmDeleteRoutine}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white text-xs font-bold"
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 shadow-md shadow-rose-200 transition disabled:opacity-50 flex items-center justify-center gap-1"
               >
-                削除する
+                {isDeletingRoutine ? '削除中...' : '削除する'}
               </button>
             </div>
           </div>
@@ -1590,8 +1854,22 @@ export const ParentDashboard: React.FC = () => {
 
       {/* 削除確認モーダル（お手伝い） */}
       {deletingChore && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDeletingChore(null);
+          }}
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center relative max-h-[85vh] overflow-y-auto my-auto">
+            <button
+              type="button"
+              onClick={() => setDeletingChore(null)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
             <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
               <Trash2 className="w-6 h-6" />
             </div>
@@ -1602,17 +1880,19 @@ export const ParentDashboard: React.FC = () => {
             <div className="flex gap-2 pt-2">
               <button
                 type="button"
+                disabled={isDeletingChore}
                 onClick={() => setDeletingChore(null)}
-                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200"
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition disabled:opacity-50"
               >
                 キャンセル
               </button>
               <button
                 type="button"
+                disabled={isDeletingChore}
                 onClick={confirmDeleteChore}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 shadow-md shadow-rose-200"
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 shadow-md shadow-rose-200 transition disabled:opacity-50 flex items-center justify-center gap-1"
               >
-                削除する
+                {isDeletingChore ? '削除中...' : '削除する'}
               </button>
             </div>
           </div>
@@ -1621,17 +1901,36 @@ export const ParentDashboard: React.FC = () => {
 
       {/* 承認用モーダル */}
       {approvingId && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4">
-            <h3 className="font-bold text-base text-slate-800">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setApprovingId(null);
+          }}
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 relative max-h-[85vh] overflow-y-auto my-auto">
+            <button
+              type="button"
+              onClick={() => setApprovingId(null)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="font-bold text-base text-slate-800 pr-6">
               {approvingReq?.choreId === 'custom' ? '自由入力お手伝いの承認' : 'お手伝いの承認'}
             </h3>
             {approvingReq && (
-              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 text-xs">
+              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 text-xs space-y-1">
                 <p className="text-[10px] text-slate-400 font-bold mb-0.5">申請された内容</p>
                 <p className="font-bold text-slate-800">{approvingReq.title}</p>
                 {approvingReq.comment && (
-                  <p className="text-slate-500 mt-1">「{approvingReq.comment}」</p>
+                  <p className="text-slate-500">「{approvingReq.comment}」</p>
+                )}
+                {approvingReq.choreId === 'custom' && approvingReq.requestedReward !== undefined && (
+                  <p className="text-[11px] font-bold text-amber-700 bg-amber-100/70 p-1.5 rounded-lg border border-amber-200/60 mt-1">
+                    子どもからの希望金額: {approvingReq.requestedReward} 円
+                  </p>
                 )}
               </div>
             )}
@@ -1650,6 +1949,9 @@ export const ParentDashboard: React.FC = () => {
                     className="w-full px-3 py-2 border-2 border-indigo-200 rounded-xl text-sm font-bold focus:border-indigo-500 focus:outline-none"
                     placeholder="例: 50"
                   />
+                  {customRewardInput < 0 && (
+                    <p className="text-[10px] text-rose-500 font-bold mt-1">0円以上の金額を入力してください。</p>
+                  )}
                   <p className="text-[10px] text-slate-400 mt-1">
                     ※ 承認するとこの金額が子どもの残高にプラスされます。
                   </p>
@@ -1685,14 +1987,15 @@ export const ParentDashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setApprovingId(null)}
-                  className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold"
+                  className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition"
                 >
                   キャンセル
                 </button>
                 <button
                   type="button"
                   onClick={handleApprove}
-                  className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-md shadow-indigo-200"
+                  disabled={approvingReq?.choreId === 'custom' && (customRewardInput < 0 || isNaN(customRewardInput))}
+                  className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-md shadow-indigo-200 hover:bg-indigo-700 disabled:opacity-50 transition"
                 >
                   承認完了
                 </button>
@@ -1704,9 +2007,23 @@ export const ParentDashboard: React.FC = () => {
 
       {/* マスター編集モーダル（お手伝い） */}
       {isEditingChore && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4">
-            <h3 className="font-bold text-base text-slate-800">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsEditingChore(false);
+          }}
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 relative max-h-[85vh] overflow-y-auto my-auto">
+            <button
+              type="button"
+              onClick={() => setIsEditingChore(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="font-bold text-base text-slate-800 pr-6">
               {editingChoreData.id ? 'お手伝いの編集' : '新しいお手伝いを追加'}
             </h3>
             <form onSubmit={handleSaveChore} className="space-y-3">
@@ -1750,16 +2067,18 @@ export const ParentDashboard: React.FC = () => {
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
+                  disabled={isSavingChore}
                   onClick={() => setIsEditingChore(false)}
-                  className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold"
+                  className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition disabled:opacity-50"
                 >
                   キャンセル
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-md shadow-indigo-200"
+                  disabled={isSavingChore}
+                  className="flex-1 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md shadow-indigo-200 transition disabled:opacity-50 flex items-center justify-center gap-1"
                 >
-                  保存する
+                  {isSavingChore ? '保存中...' : '保存する'}
                 </button>
               </div>
             </form>
@@ -1767,10 +2086,82 @@ export const ParentDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* 履歴全削除確認モーダル */}
+      {/* 叱られ減額の二重確認モーダル */}
+      {showPenaltyConfirm && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowPenaltyConfirm(false);
+          }}
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center relative max-h-[85vh] overflow-y-auto my-auto">
+            <button
+              type="button"
+              onClick={() => setShowPenaltyConfirm(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <ShieldAlert className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-base text-slate-800">減額を実行しますか？</h3>
+            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 text-xs text-left space-y-1">
+              <p className="text-slate-500">
+                <span className="font-bold text-slate-700">理由:</span> {penaltyReason}
+              </p>
+              <p className="text-rose-600 font-extrabold">
+                減額金額: -{penaltyAmount} 円
+              </p>
+              <p className="text-slate-400 text-[11px] pt-1 border-t border-slate-200">
+                減額後の残高: {Math.max(0, household.balance - penaltyAmount)} 円
+                {household.balance - penaltyAmount < 0 && ' (0円になります)'}
+              </p>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              ※お子さんとのお約束に基づき減額します。この操作は履歴に残ります。
+            </p>
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowPenaltyConfirm(false)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition"
+              >
+                もどる
+              </button>
+              <button
+                type="button"
+                onClick={confirmExecutePenalty}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition shadow-md shadow-rose-200"
+              >
+                減額する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 履歴全削除確認モーダル（バックアップダウンロード付き） */}
       {showClearHistoryConfirm && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowClearHistoryConfirm(false);
+          }}
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center relative max-h-[85vh] overflow-y-auto my-auto">
+            <button
+              type="button"
+              disabled={isClearingHistory}
+              onClick={() => setShowClearHistoryConfirm(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
             <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
               <Trash2 className="w-6 h-6" />
             </div>
@@ -1778,6 +2169,32 @@ export const ParentDashboard: React.FC = () => {
             <p className="text-xs text-slate-500 leading-relaxed">
               登録されているすべての収支・お手伝い・ルーティン履歴（計 <span className="font-bold text-slate-700">{transactions.length}件</span>）を削除してもよろしいですか？
             </p>
+
+            {/* 削除前バックアップダウンロードボタン */}
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl text-left">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
+                  <Download className="w-3.5 h-3.5 text-indigo-600" />
+                  バックアップの保存
+                </span>
+                <button
+                  type="button"
+                  onClick={handleDownloadBackup}
+                  className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-[10px] font-bold border border-indigo-200 transition"
+                >
+                  JSONダウンロード
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                ※削除前にデータをパソコンやスマホに保存しておくことを推奨します。
+              </p>
+              {backupDownloaded && (
+                <p className="text-[10px] text-emerald-600 font-bold mt-1">
+                  ✓ バックアップファイルをダウンロードしました
+                </p>
+              )}
+            </div>
+
             <p className="text-[11px] text-rose-600 bg-rose-50 p-2 rounded-xl font-medium">
               ※ この操作は取り消せません。現在の残高は変更されません。
             </p>

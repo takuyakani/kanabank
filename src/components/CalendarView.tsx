@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { Transaction } from '../types';
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Coins, HeartCrack, ShoppingBag } from 'lucide-react';
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Coins, HeartCrack, ShoppingBag, Sparkles } from 'lucide-react';
 
 interface CalendarViewProps {
   transactions: Transaction[];
@@ -159,9 +159,21 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ transactions }) => {
 
       {/* 選択した日の詳細タイムライン */}
       <div className="mt-5 pt-4 border-t border-slate-100">
-        <h4 className="text-xs font-bold text-slate-500 mb-2">
-          {selectedDateStr} のできごと ({selectedTxs.length}件)
-        </h4>
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5">
+            <CalendarIcon className="w-4 h-4 text-amber-500" />
+            <span>{selectedDateStr} のできごと</span>
+            <span className="text-[10px] text-slate-400 font-normal">({selectedTxs.length}件)</span>
+          </h4>
+
+          {selectedTxs.some((t) => t.type === 'chore') && (
+            <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full border border-amber-200">
+              <Sparkles className="w-3 h-3 text-amber-600" />
+              がんばったスタンプ！
+            </span>
+          )}
+        </div>
+
         {selectedTxs.length === 0 ? (
           <div className="py-4 text-center text-slate-400 text-xs">
             この日はきろくがありません
@@ -179,7 +191,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ transactions }) => {
                   {tx.type === 'spend' && <ShoppingBag className="w-4 h-4 text-blue-500 shrink-0" />}
                   <div>
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <p className="font-semibold text-slate-700">{tx.title}</p>
+                      <p className="font-bold text-slate-800">{tx.title}</p>
                       {tx.createdBy && (
                         <span className="text-[9px] bg-indigo-50 text-indigo-700 px-1.5 py-0.2 rounded-full font-medium">
                           {tx.createdBy.includes('@') ? tx.createdBy.split('@')[0] : tx.createdBy}
@@ -190,7 +202,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ transactions }) => {
                   </div>
                 </div>
                 <span
-                  className={`font-bold shrink-0 ${
+                  className={`font-black shrink-0 ${
                     tx.amount > 0 ? 'text-amber-600' : 'text-rose-600'
                   }`}
                 >

@@ -26,7 +26,8 @@ import {
   AlertTriangle,
   Type,
   Edit3,
-  Search
+  Search,
+  X
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -49,6 +50,8 @@ export const ChildDashboard: React.FC = () => {
     routineLogs,
     fontSize,
     setFontSize,
+    textMode,
+    setTextMode,
     submitChoreRequest,
     submitCustomChoreRequest,
     reportRoutineDone,
@@ -62,6 +65,7 @@ export const ChildDashboard: React.FC = () => {
   const [comment, setComment] = useState('');
   const [customChoreTitle, setCustomChoreTitle] = useState('');
   const [customChoreComment, setCustomChoreComment] = useState('');
+  const [customRewardWanted, setCustomRewardWanted] = useState<string>('');
   const [isCustomMode, setIsCustomMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [reportingRoutineId, setReportingRoutineId] = useState<string | null>(null);
@@ -82,6 +86,18 @@ export const ChildDashboard: React.FC = () => {
   // 目標達成引き換えモーダル
   const [showRedeemModal, setShowRedeemModal] = useState(false);
   const [redeemError, setRedeemError] = useState('');
+
+  // ESCキーでモーダルを閉じる
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsEditingGoal(false);
+        setShowRedeemModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // 達成率計算
   const isGoalReached = household.balance >= household.goalAmount && household.goalAmount > 0;
@@ -138,14 +154,16 @@ export const ChildDashboard: React.FC = () => {
   const handleCustomApply = async () => {
     if (!customChoreTitle.trim()) return;
     setSubmitting(true);
+    const parsedReward = customRewardWanted ? Number(customRewardWanted) : undefined;
     try {
-      await submitCustomChoreRequest(customChoreTitle.trim(), customChoreComment.trim());
+      await submitCustomChoreRequest(customChoreTitle.trim(), customChoreComment.trim(), parsedReward);
     } catch (err) {
       console.error('自由入力申請エラー:', err);
     } finally {
       setSubmitting(false);
       setCustomChoreTitle('');
       setCustomChoreComment('');
+      setCustomRewardWanted('');
       setIsCustomMode(false);
     }
 
@@ -195,15 +213,41 @@ export const ChildDashboard: React.FC = () => {
       {/* トップバー */}
       <header className="px-4 py-3 bg-white/90 backdrop-blur border-b border-amber-100 flex items-center justify-between sticky top-0 z-20">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-amber-400 flex items-center justify-center text-white font-black text-sm">
+          <div className="w-8 h-8 rounded-full bg-amber-400 flex items-center justify-center text-white font-black text-sm shrink-0">
             お
           </div>
           <div>
-            <h1 className="text-sm font-extrabold text-slate-800 leading-tight">こども用おさいふ</h1>
-            <p className="text-[10px] text-amber-600 font-medium">がんばってお手伝いしよう！</p>
+            <h1 className="text-sm font-extrabold text-slate-800 leading-tight">
+              {textMode === 'hiragana' ? 'こどもよう おさいふ' : 'こども用おさいふ'}
+            </h1>
+            <p className="text-[10px] text-amber-600 font-medium">
+              {textMode === 'hiragana' ? 'がんばっておてつだいしよう！' : 'がんばってお手伝いしよう！'}
+            </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          {/* ひらがな / かんじ 切替スイッチ */}
+          <div className="flex bg-amber-100/80 rounded-xl p-0.5 border border-amber-200">
+            <button
+              onClick={() => setTextMode('hiragana')}
+              className={`px-1.5 py-0.5 rounded-lg text-[10px] font-bold transition ${
+                textMode === 'hiragana' ? 'bg-amber-500 text-white shadow-xs' : 'text-amber-800 hover:text-amber-950'
+              }`}
+              title="ひらがなモード"
+            >
+              ひらがな
+            </button>
+            <button
+              onClick={() => setTextMode('normal')}
+              className={`px-1.5 py-0.5 rounded-lg text-[10px] font-bold transition ${
+                textMode === 'normal' ? 'bg-amber-500 text-white shadow-xs' : 'text-amber-800 hover:text-amber-950'
+              }`}
+              title="かんじ・通常モード"
+            >
+              かんじ
+            </button>
+          </div>
+
           {/* 文字サイズ変更 */}
           <div className="flex items-center bg-slate-100 rounded-xl p-0.5 border border-slate-200">
             <span className="text-[10px] text-slate-400 pl-1 pr-0.5 flex items-center" title="文字サイズ">
@@ -244,14 +288,20 @@ export const ChildDashboard: React.FC = () => {
               <div className="absolute top-2 right-2 opacity-10">
                 <Coins className="w-32 h-32" />
               </div>
-              <p className="text-xs font-bold tracking-wider opacity-90 mb-1">いまのバーチャル残高</p>
+              <p className="text-xs font-bold tracking-wider opacity-90 mb-1">
+                {textMode === 'hiragana' ? 'いまの ざんだか' : 'いまのバーチャル残高'}
+              </p>
               <div className="flex items-center justify-center gap-2 my-2">
                 <Coins className="w-9 h-9 text-amber-100" />
                 <span className="text-5xl font-black tracking-tight">{household.balance}</span>
-                <span className="text-xl font-bold self-end mb-1">円</span>
+                <span className="text-xl font-bold self-end mb-1">
+                  {textMode === 'hiragana' ? 'えん' : '円'}
+                </span>
               </div>
               <p className="text-[11px] bg-white/20 backdrop-blur rounded-full px-3 py-1 inline-block mt-1 font-bold">
-                {isGoalReached ? '🎉 目標を達成したよ！すごい！' : `目標まであと ${Math.max(0, household.goalAmount - household.balance)} 円`}
+                {isGoalReached
+                  ? (textMode === 'hiragana' ? '🎉 もくひょうを たっせいしたよ！すごい！' : '🎉 目標を達成したよ！すごい！')
+                  : (textMode === 'hiragana' ? `もくひょうまで あと ${Math.max(0, household.goalAmount - household.balance)} えん` : `目標まであと ${Math.max(0, household.goalAmount - household.balance)} 円`)}
               </p>
             </div>
 
@@ -263,15 +313,19 @@ export const ChildDashboard: React.FC = () => {
                     <Gift className="w-6 h-6 text-white" />
                   </div>
                   <div>
-                    <h4 className="font-extrabold text-sm leading-tight">目標をたっせいしたよ！</h4>
-                    <p className="text-[11px] opacity-90">「{household.goalTitle}」を買ってもらおう！</p>
+                    <h4 className="font-extrabold text-sm leading-tight">
+                      {textMode === 'hiragana' ? 'もくひょうを たっせいしたよ！' : '目標をたっせいしたよ！'}
+                    </h4>
+                    <p className="text-[11px] opacity-90">
+                      「{household.goalTitle}」{textMode === 'hiragana' ? 'を かってもらおう！' : 'を買ってもらおう！'}
+                    </p>
                   </div>
                 </div>
                 <button
                   onClick={() => setShowRedeemModal(true)}
                   className="px-3.5 py-2 rounded-xl bg-white text-emerald-700 font-black text-xs shadow-md hover:bg-emerald-50 transition shrink-0"
                 >
-                  引き換える
+                  {textMode === 'hiragana' ? 'ひきかえる' : '引き換える'}
                 </button>
               </div>
             )}
@@ -630,6 +684,30 @@ export const ChildDashboard: React.FC = () => {
                     />
                   </div>
 
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {textMode === 'hiragana' ? 'もらいたい おこづかい（きぼう・なくてもOK）' : 'もらいたいお小遣い（希望金額・任意）'}
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min={0}
+                        value={customRewardWanted}
+                        onChange={(e) => setCustomRewardWanted(e.target.value)}
+                        placeholder="例: 100"
+                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400 pr-10"
+                      />
+                      <span className="absolute right-3 top-2.5 text-xs text-slate-400 font-bold">
+                        {textMode === 'hiragana' ? 'えん' : '円'}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      {textMode === 'hiragana'
+                        ? '※さいしゅうてきな きんがくは おとうさん・おかあさんが きめるよ'
+                        : '※最終的な金額はお父さん・お母さんが確認して決定します'}
+                    </p>
+                  </div>
+
                   <button
                     onClick={handleCustomApply}
                     disabled={submitting || !customChoreTitle.trim()}
@@ -686,12 +764,28 @@ export const ChildDashboard: React.FC = () => {
 
       {/* 目標引き換え確認モーダル */}
       {showRedeemModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowRedeemModal(false);
+          }}
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center relative max-h-[85vh] overflow-y-auto my-auto">
+            <button
+              type="button"
+              onClick={() => setShowRedeemModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
             <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
               <Gift className="w-8 h-8" />
             </div>
-            <h3 className="font-extrabold text-lg text-slate-800">目標の品をゲット！</h3>
+            <h3 className="font-extrabold text-lg text-slate-800">
+              {textMode === 'hiragana' ? 'もくひょうの しなを ゲット！' : '目標の品をゲット！'}
+            </h3>
             <p className="text-xs text-slate-500 leading-relaxed">
               「<span className="font-bold text-slate-700">{household.goalTitle}</span>」を買うために、残高から <span className="font-bold text-slate-800">{household.goalAmount}円</span> を使いますか？
             </p>
@@ -702,16 +796,16 @@ export const ChildDashboard: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowRedeemModal(false)}
-                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold"
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition"
               >
-                あとにする
+                {textMode === 'hiragana' ? 'あとにする' : 'あとにする'}
               </button>
               <button
                 type="button"
                 onClick={handleRedeemGoal}
-                className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold shadow-md shadow-emerald-200 hover:bg-emerald-700"
+                className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold shadow-md shadow-emerald-200 hover:bg-emerald-700 transition"
               >
-                引き換える！
+                {textMode === 'hiragana' ? 'ひきかえる！' : '引き換える！'}
               </button>
             </div>
           </div>
@@ -720,9 +814,25 @@ export const ChildDashboard: React.FC = () => {
 
       {/* 目標編集モーダル */}
       {isEditingGoal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4">
-            <h3 className="font-bold text-base text-slate-800">目標を新しくする</h3>
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsEditingGoal(false);
+          }}
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 relative max-h-[85vh] overflow-y-auto my-auto">
+            <button
+              type="button"
+              onClick={() => setIsEditingGoal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="font-bold text-base text-slate-800 pr-6">
+              {textMode === 'hiragana' ? 'もくひょうを あたらしくする' : '目標を新しくする'}
+            </h3>
             {goalError && (
               <div className="p-2.5 bg-rose-50 text-rose-600 text-xs rounded-xl flex items-center gap-1.5">
                 <AlertCircle className="w-4 h-4 shrink-0" />
@@ -731,7 +841,9 @@ export const ChildDashboard: React.FC = () => {
             )}
             <form onSubmit={handleSaveGoal} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">ほしいもの・目標</label>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">
+                  {textMode === 'hiragana' ? 'ほしいもの・もくひょう' : 'ほしいもの・目標'}
+                </label>
                 <input
                   type="text"
                   required
@@ -742,7 +854,9 @@ export const ChildDashboard: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">目標金額（円）</label>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">
+                  {textMode === 'hiragana' ? 'もくひょう きんがく（えん）' : '目標金額（円）'}
+                </label>
                 <input
                   type="number"
                   required
@@ -756,15 +870,15 @@ export const ChildDashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsEditingGoal(false)}
-                  className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold"
+                  className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition"
                 >
-                  キャンセル
+                  {textMode === 'hiragana' ? 'やめる' : 'キャンセル'}
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 rounded-xl bg-amber-500 text-white text-xs font-bold shadow-md shadow-amber-200"
+                  className="flex-1 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow-md shadow-amber-200 transition"
                 >
-                  ほぞん
+                  {textMode === 'hiragana' ? 'ほぞん' : '保存'}
                 </button>
               </div>
             </form>

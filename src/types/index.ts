@@ -3,6 +3,9 @@ export type Role = 'parent' | 'child';
 // 文字サイズ設定
 export type FontSizePreference = 'small' | 'medium' | 'large';
 
+// 表示モード（ふつう / ひらがなモード）
+export type TextMode = 'normal' | 'hiragana';
+
 // 世帯・全体データ
 export interface HouseholdData {
   id: string;
@@ -34,6 +37,7 @@ export interface ChoreRequest {
   processedBy?: string;       // 承認・却下した親の識別子/メール
   comment?: string;           // 子どものコメント
   parentComment?: string;     // 親からのメッセージや却下理由
+  requestedReward?: number;   // 自由入力時に子どもが希望した金額（円）
 }
 
 // スケジュール設定種別
@@ -99,4 +103,5 @@ export interface Transaction {
   createdBy?: string;         // 操作した親の識別子/メール
   note?: string;
   relatedRequestId?: string;
+  spendMethod?: 'cash' | 'virtual'; // 出金方法（現金手渡し / バーチャル残高のみ）
 }

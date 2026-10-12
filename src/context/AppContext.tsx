@@ -7,7 +7,8 @@ import type {
   Transaction,
   RoutineTask,
   RoutineLog,
-  FontSizePreference
+  FontSizePreference,
+  TextMode
 } from '../types';
 import {
   INITIAL_HOUSEHOLD,
@@ -53,17 +54,19 @@ interface AppContextType {
   routineLogs: RoutineLog[];
   fontSize: FontSizePreference;
   setFontSize: (size: FontSizePreference) => void;
+  textMode: TextMode;
+  setTextMode: (mode: TextMode) => void;
   isDemoMode: boolean;
   login: (email: string, pass: string, targetRole: Role) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   updateGoal: (title: string, amount: number) => Promise<{ success: boolean; error?: string }>;
   updateBalance: (newBalance: number, reason?: string) => Promise<{ success: boolean; error?: string }>;
   submitChoreRequest: (choreId: string, comment?: string) => Promise<void>;
-  submitCustomChoreRequest: (title: string, comment?: string) => Promise<void>;
+  submitCustomChoreRequest: (title: string, comment?: string, requestedReward?: number) => Promise<void>;
   approveRequest: (requestId: string, bonus?: number, parentComment?: string, customReward?: number) => Promise<void>;
   rejectRequest: (requestId: string, parentComment?: string) => Promise<void>;
   addPenalty: (title: string, amount: number, note?: string) => Promise<{ success: boolean; error?: string }>;
-  addSpend: (title: string, amount: number, note?: string) => Promise<{ success: boolean; error?: string }>;
+  addSpend: (title: string, amount: number, note?: string, spendMethod?: 'cash' | 'virtual') => Promise<{ success: boolean; error?: string }>;
   addChoreMaster: (chore: Omit<ChoreMaster, 'id'>) => Promise<void>;
   updateChoreMaster: (chore: ChoreMaster) => Promise<void>;
   deleteChoreMaster: (id: string) => Promise<void>;
@@ -73,7 +76,7 @@ interface AppContextType {
   updateRoutine: (routine: RoutineTask) => Promise<void>;
   deleteRoutine: (id: string) => Promise<void>;
   reportRoutineDone: (routineId: string, targetDate: string) => Promise<void>;
-  approveRoutineLog: (logId: string) => Promise<void>;
+  approveRoutineLog: (logId: string) => Promise<{ success: boolean; error?: string }>;
   checkAndApplyOverduePenalties: () => Promise<void>;
   // 履歴管理
   clearAllTransactions: () => Promise<void>;
@@ -102,12 +105,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 文字サイズステート
   const [fontSize, setFontSizeState] = useState<FontSizePreference>('medium');
 
+  // 表示モードステート（ふつう / ひらがなモード）
+  const [textMode, setTextModeState] = useState<TextMode>('normal');
+
   // BroadcastChannel 参照
   const channelRef = useRef<BroadcastChannel | null>(null);
 
   // アカウントに応じた文字サイズ保存・適用キー
   const getFontSizeStorageKey = (userEmail?: string) => {
     return `kanabank_fontsize_${userEmail || 'guest'}`;
+  };
+
+  // アカウントに応じた表示モード保存・適用キー
+  const getTextModeStorageKey = (userEmail?: string) => {
+    return `kanabank_textmode_${userEmail || 'guest'}`;
   };
 
   // 文字サイズの変更
@@ -123,12 +134,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // ユーザー切替時の文字サイズ読み込み
+  // 表示モードの変更
+  const setTextMode = (mode: TextMode) => {
+    setTextModeState(mode);
+    const key = getTextModeStorageKey(currentUser?.email);
+    localStorage.setItem(key, mode);
+  };
+
+  // ユーザー切替時の文字サイズ・表示モード読み込み
   useEffect(() => {
     const key = getFontSizeStorageKey(currentUser?.email);
     const saved = localStorage.getItem(key) as FontSizePreference | null;
     const initialSize = saved || 'medium';
     setFontSizeState(initialSize);
+
+    const modeKey = getTextModeStorageKey(currentUser?.email);
+    const savedMode = localStorage.getItem(modeKey) as TextMode | null;
+    setTextModeState(savedMode || 'normal');
 
     if (typeof document !== 'undefined') {
       document.documentElement.classList.remove('font-size-small', 'font-size-medium', 'font-size-large');
@@ -596,7 +618,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // マスターにないお手伝いの申請（自由入力）
-  const submitCustomChoreRequest = async (title: string, comment: string = '') => {
+  const submitCustomChoreRequest = async (title: string, comment: string = '', requestedReward?: number) => {
     if (!title.trim()) return;
 
     const newReq: ChoreRequest = {
@@ -604,6 +626,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       choreId: 'custom',
       title: title.trim(),
       reward: 0, // 親が承認時に決定
+      requestedReward: typeof requestedReward === 'number' && requestedReward > 0 ? Math.floor(requestedReward) : undefined,
       bonus: 0,
       status: 'pending',
       requestedAt: new Date().toISOString(),
@@ -761,7 +784,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // お小遣い使用（出金）
-  const addSpend = async (title: string, amount: number, note: string = '') => {
+  const addSpend = async (title: string, amount: number, note: string = '', spendMethod?: 'cash' | 'virtual') => {
     const cleanAmount = Math.floor(amount);
     if (!title.trim()) {
       return { success: false, error: '使った目的・買ったものを入力してください。' };
@@ -791,6 +814,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: nowIso,
       createdBy: currentActor,
       note: note.trim(),
+      spendMethod: spendMethod || 'cash',
     };
     const nextTxs = [newTx, ...transactions];
 
@@ -899,7 +923,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastAndSaveLocalData(undefined, nextChores);
 
     if (isFirebaseConfigured && db) {
-      await setDoc(doc(db, 'chores', newChore.id), newChore);
+      try {
+        await setDoc(doc(db, 'chores', newChore.id), newChore, { merge: true });
+      } catch (err) {
+        console.warn('Firebase chores add error (local state preserved):', err);
+      }
     }
   };
 
@@ -914,7 +942,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastAndSaveLocalData(undefined, nextChores);
 
     if (isFirebaseConfigured && db) {
-      await setDoc(doc(db, 'chores', chore.id), updated);
+      try {
+        await setDoc(doc(db, 'chores', chore.id), updated, { merge: true });
+      } catch (err) {
+        console.warn('Firebase chores update error (local state preserved):', err);
+      }
     }
   };
 
@@ -925,7 +957,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastAndSaveLocalData(undefined, nextChores);
 
     if (isFirebaseConfigured && db) {
-      await deleteDoc(doc(db, 'chores', id));
+      try {
+        await deleteDoc(doc(db, 'chores', id));
+      } catch (err) {
+        console.warn('Firebase chores delete error (local state preserved):', err);
+      }
     }
   };
 
@@ -946,7 +982,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastAndSaveLocalData(undefined, undefined, undefined, undefined, nextRoutines);
 
     if (isFirebaseConfigured && db) {
-      await setDoc(doc(db, 'routines', newRoutine.id), newRoutine);
+      try {
+        await setDoc(doc(db, 'routines', newRoutine.id), newRoutine, { merge: true });
+      } catch (err) {
+        console.warn('Firebase routines add error (local state preserved):', err);
+      }
     }
   };
 
@@ -963,7 +1003,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastAndSaveLocalData(undefined, undefined, undefined, undefined, nextRoutines);
 
     if (isFirebaseConfigured && db) {
-      await setDoc(doc(db, 'routines', routine.id), updated);
+      try {
+        await setDoc(doc(db, 'routines', routine.id), updated, { merge: true });
+      } catch (err) {
+        console.warn('Firebase routines update error (local state preserved):', err);
+      }
     }
   };
 
@@ -974,7 +1018,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastAndSaveLocalData(undefined, undefined, undefined, undefined, nextRoutines);
 
     if (isFirebaseConfigured && db) {
-      await deleteDoc(doc(db, 'routines', id));
+      try {
+        await deleteDoc(doc(db, 'routines', id));
+      } catch (err) {
+        console.warn('Firebase routines delete error (local state preserved):', err);
+      }
     }
   };
 
@@ -1009,14 +1057,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastAndSaveLocalData(undefined, undefined, undefined, undefined, undefined, nextLogs);
 
     if (isFirebaseConfigured && db) {
-      await setDoc(doc(db, 'routineLogs', logId), updatedLog);
+      try {
+        await setDoc(doc(db, 'routineLogs', logId), updatedLog, { merge: true });
+      } catch (err) {
+        console.warn('Firebase sync error for reportRoutineDone (local state preserved):', err);
+      }
     }
   };
 
   // 親によるルーティン承認
-  const approveRoutineLog = async (logId: string) => {
+  const approveRoutineLog = async (logId: string): Promise<{ success: boolean; error?: string }> => {
     const rLog = routineLogs.find((l) => l.id === logId);
-    if (!rLog || rLog.status !== 'pending') return;
+    if (!rLog) {
+      console.warn('Routine log not found:', logId);
+      return { success: false, error: '対象のいつもやること報告が見つかりませんでした。' };
+    }
+    if (rLog.status !== 'pending') {
+      return { success: false, error: 'このいつもやることは既に承認済みまたは処理されています。' };
+    }
 
     const nowIso = new Date().toISOString();
     const todayDate = nowIso.split('T')[0];
@@ -1031,7 +1089,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const nextLogs = routineLogs.map((l) => (l.id === logId ? updatedLog : l));
     let nextBalance = household.balance;
-    let nextTxs = transactions;
 
     // 取引履歴（カレンダー反映用）を作成
     // ご褒美が0円の場合でも「いつもやること達成（0円）」としてカレンダーに記録
@@ -1049,27 +1106,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdBy: currentActor,
       note: `${rLog.targetDate}実施分を承認${rLog.reward === 0 ? '（習慣達成・ご褒美なし）' : ''}`,
     };
-    nextTxs = [newTx, ...transactions];
-
-    if (isFirebaseConfigured && db) {
-      await setDoc(doc(db, 'transactions', newTx.id), newTx);
-    }
-
+    const nextTxs = [newTx, ...transactions];
     const updatedHousehold = { ...household, balance: nextBalance, updatedAt: nowIso };
 
+    // 1. ローカルステート・localStorage・BroadcastChannel を最優先で即座に同期更新（楽観的UI更新）
     setRoutineLogs(nextLogs);
     setHousehold(updatedHousehold);
     setTransactions(nextTxs);
     broadcastAndSaveLocalData(updatedHousehold, undefined, undefined, nextTxs, undefined, nextLogs);
 
+    // 2. Firebaseへの同期（エラーが発生してもローカル反映を壊さないようtry-catchで安全に処理）
     if (isFirebaseConfigured && db) {
-      await updateDoc(doc(db, 'routineLogs', logId), {
-        status: 'completed',
-        approvedAt: nowIso,
-        approvedBy: currentActor,
-      });
-      await updateDoc(doc(db, 'household', 'default'), { balance: nextBalance, updatedAt: nowIso });
+      try {
+        await Promise.all([
+          // setDoc with merge: true で、ドキュメントが存在しない場合でも安全に作成・更新
+          setDoc(doc(db, 'routineLogs', logId), updatedLog, { merge: true }),
+          setDoc(doc(db, 'household', 'default'), { balance: nextBalance, updatedAt: nowIso }, { merge: true }),
+          setDoc(doc(db, 'transactions', newTx.id), newTx),
+        ]);
+      } catch (err) {
+        console.warn('Firebase routineLogs approve sync error (local state preserved):', err);
+      }
     }
+
+    return { success: true };
   };
 
   // 履歴（トランザクション）を全削除する保護者機能
@@ -1102,6 +1162,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         routineLogs,
         fontSize,
         setFontSize,
+        textMode,
+        setTextMode,
         isDemoMode,
         login,
         logout,
