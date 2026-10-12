@@ -56,6 +56,7 @@ export const ParentDashboard: React.FC = () => {
     updateRoutine,
     deleteRoutine,
     approveRoutineLog,
+    clearAllTransactions,
     logout,
   } = useApp();
 
@@ -116,6 +117,11 @@ export const ParentDashboard: React.FC = () => {
   // 目標達成引き換え
   const [goalRedeemSuccess, setGoalRedeemSuccess] = useState(false);
   const [goalRedeemError, setGoalRedeemError] = useState('');
+
+  // 履歴全削除モーダル
+  const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
+  const [isClearingHistory, setIsClearingHistory] = useState(false);
+  const [clearHistorySuccess, setClearHistorySuccess] = useState(false);
 
   // クラウド手動設定
   const currentSavedConfig = getSavedFirebaseConfig();
@@ -914,7 +920,35 @@ export const ParentDashboard: React.FC = () => {
         {/* --- タブ6: カレンダー --- */}
         {activeTab === 'calendar' && (
           <div className="space-y-4">
+            {clearHistorySuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-2xl font-bold flex items-center gap-2 shadow-xs">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>履歴をすべて削除しました。</span>
+              </div>
+            )}
+
             <CalendarView transactions={transactions} />
+
+            {/* 履歴の管理・全削除カード */}
+            <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                  <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                  履歴データの一括管理（保護者用）
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  カレンダーおよび月間サマリーに記録されているすべての収支履歴（{transactions.length}件）を消去します。
+                </p>
+              </div>
+              <button
+                onClick={() => setShowClearHistoryConfirm(true)}
+                disabled={transactions.length === 0}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 disabled:opacity-40 disabled:hover:bg-rose-50 border border-rose-200 transition shrink-0 flex items-center gap-1 shadow-2xs"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>履歴をすべて削除</span>
+              </button>
+            </div>
           </div>
         )}
 
@@ -1507,6 +1541,49 @@ export const ParentDashboard: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 履歴全削除確認モーダル */}
+      {showClearHistoryConfirm && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-base text-slate-800">すべての履歴を削除</h3>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              登録されているすべての収支・お手伝い・ルーティン履歴（計 <span className="font-bold text-slate-700">{transactions.length}件</span>）を削除してもよろしいですか？
+            </p>
+            <p className="text-[11px] text-rose-600 bg-rose-50 p-2 rounded-xl font-medium">
+              ※ この操作は取り消せません。現在の残高は変更されません。
+            </p>
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isClearingHistory}
+                onClick={() => setShowClearHistoryConfirm(false)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                disabled={isClearingHistory}
+                onClick={async () => {
+                  setIsClearingHistory(true);
+                  await clearAllTransactions();
+                  setIsClearingHistory(false);
+                  setShowClearHistoryConfirm(false);
+                  setClearHistorySuccess(true);
+                  setTimeout(() => setClearHistorySuccess(false), 3000);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition shadow-md shadow-rose-200"
+              >
+                {isClearingHistory ? '削除中...' : 'すべて削除'}
+              </button>
+            </div>
           </div>
         </div>
       )}

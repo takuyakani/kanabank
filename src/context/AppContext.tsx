@@ -34,6 +34,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  getDocs,
   query,
   orderBy,
   type Firestore
@@ -70,6 +71,8 @@ interface AppContextType {
   reportRoutineDone: (routineId: string, targetDate: string) => Promise<void>;
   approveRoutineLog: (logId: string) => Promise<void>;
   checkAndApplyOverduePenalties: () => Promise<void>;
+  // 履歴管理
+  clearAllTransactions: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -839,6 +842,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // 履歴（トランザクション）を全削除する保護者機能
+  const clearAllTransactions = async () => {
+    setTransactions([]);
+    broadcastAndSaveLocalData(undefined, undefined, undefined, []);
+
+    if (isFirebaseConfigured && db) {
+      const firestoreDb: Firestore = db;
+      try {
+        const snap = await getDocs(collection(firestoreDb, 'transactions'));
+        const deletePromises = snap.docs.map((docSnap) => deleteDoc(doc(firestoreDb, 'transactions', docSnap.id)));
+        await Promise.all(deletePromises);
+      } catch (err) {
+        console.error('Failed to clear transactions from Firestore:', err);
+      }
+    }
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -871,6 +891,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         reportRoutineDone,
         approveRoutineLog,
         checkAndApplyOverduePenalties,
+        clearAllTransactions,
       }}
     >
       {children}
