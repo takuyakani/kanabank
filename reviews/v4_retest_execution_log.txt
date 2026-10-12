@@ -1,0 +1,86 @@
+=== 1. 親1 (test1) のログインとFirebase設定入力 ===
+Parent 1 saved Firebase config.
+Parent 1 header text: 親
+保護者ダッシュボード
+残高: 500 円
+同期エラー（設定確認）
+小
+中
+大
+Share code input exists: true
+JSON backup button exists: true
+=== 2. 親2 (test2) のログインとFirebase設定入力 ===
+Parent 2 header text: 親
+保護者ダッシュボード
+残高: 500 円
+同期エラー（設定確認）
+小
+中
+大
+=== 3. 子ども (test3) のログイン & ひらがなモード完全検証 ===
+Child hiragana body snippet:
+お
+こどもよう おさいふ
+
+がんばっておてつだいしよう！
+
+ひらがな
+かんじ
+小
+中
+大
+
+いまの おかね
+
+500
+えん
+
+もくひょうまで あと 2500 えん
+
+きょうの いつもやること
+2こ
+明日の学校の時間割と持ち物チェック
+できなかったら-30えん
+
+きげん: きょうの よる 11:59まで
+
+おわったよ！
+宿題をすべて終える
++20えん
+できなかったら-50えん
+
+あと1にち までに やろう（よる 11:59まで）
+
+おわったよ！
+すきなおもちゃ・ゲーム
+へんこう
+16% 達成
+もくひょう: 3000円
+
+おうちのひとの かくにんまち: 1こ
+
+しょうにん されたら おかねが ふえるよ！
+
+べつの おてつだいを する
+さいきんの おてつだい
+お風呂そうじ
++50えん
+
+「ピカピカにみがいたよ！」
+
+かくにんちゅう
+おさいふ
+お手伝い申請
+1
+カレンダー
+=== 4. 親1から残高を1500円に変更し、マルチアカウント同期を検証 ===
+Parent 1 updated balance to 1500.
+Parent 2 (no reload) body contains 1500: false
+Parent 2 (after reload) body contains 1500: false
+Child (after reload) body contains 1500: false
+=== 5. 履歴削除 Undo / 復元機能の再検証 ===
+Undo banner visible: true
+=== 6. コンソールエラー・通信警告の集計 ===
+P1 errors: ["[warning] Firestore routineLogs listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore routines listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore requests listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore transactions listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore chores listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore household listener error: FirebaseError: Missing or insufficient permissions.","[error] Failed to load resource: the server responded with a status of 400 ()","[warning] Firebase transaction sync error for updateBalance: FirebaseError: Missing or insufficient permissions.","[warning] Firebase household update error for updateBalance: FirebaseError: Missing or insufficient permissions.","[error] Failed to clear transactions from Firestore: FirebaseError: Missing or insufficient permissions."]
+P2 errors: ["[warning] Firestore requests listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore chores listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore household listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore routines listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore transactions listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore routineLogs listener error: FirebaseError: Missing or insufficient permissions.","[error] Failed to load resource: the server responded with a status of 400 ()","[warning] Firestore requests listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore household listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore routines listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore routineLogs listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore transactions listener error: FirebaseError: Missing or insufficient permissions.","[warning] Firestore chores listener error: FirebaseError: Missing or insufficient permissions.","[error] Failed to load resource: the server responded with a status of 400 ()"]
+CH errors: []
