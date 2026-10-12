@@ -166,6 +166,11 @@ export const ChildDashboard: React.FC = () => {
       return;
     }
     setIsEditingGoal(false);
+    confetti({
+      particleCount: 60,
+      spread: 60,
+      origin: { y: 0.6 },
+    });
   };
 
   const handleRedeemGoal = async () => {

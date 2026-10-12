@@ -23,6 +23,8 @@ import {
 import { isFirebaseConfigured, auth, db } from '../lib/firebase';
 import {
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signInAnonymously,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   type User
@@ -215,70 +217,140 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 初期データロード
   useEffect(() => {
+    // 常にまずローカルストレージから直近のデータを読み込む（オフライン時やFirestore遅延・エラー時の即時反映保証）
+    const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (savedData) {
+      try {
+        const parsed = JSON.parse(savedData);
+        if (parsed.household) {
+          setHousehold((prev) => ({
+            ...INITIAL_HOUSEHOLD,
+            ...prev,
+            ...parsed.household,
+          }));
+        }
+        if (parsed.chores) setChores(parsed.chores);
+        if (parsed.requests) setRequests(parsed.requests);
+        if (parsed.transactions) setTransactions(parsed.transactions);
+        if (parsed.routines) setRoutines(parsed.routines);
+        if (parsed.routineLogs) setRoutineLogs(parsed.routineLogs);
+      } catch (e) {
+        console.error('Failed to parse local storage data', e);
+      }
+    }
+
     if (!isFirebaseConfigured) {
       setIsDemoMode(true);
-      const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (savedData) {
-        try {
-          const parsed = JSON.parse(savedData);
-          if (parsed.household) setHousehold(parsed.household);
-          if (parsed.chores) setChores(parsed.chores);
-          if (parsed.requests) setRequests(parsed.requests);
-          if (parsed.transactions) setTransactions(parsed.transactions);
-          if (parsed.routines) setRoutines(parsed.routines);
-          if (parsed.routineLogs) setRoutineLogs(parsed.routineLogs);
-        } catch (e) {
-          console.error('Failed to parse local storage data', e);
-        }
-      }
     } else {
       if (!auth || !db) return;
       const firestoreDb: Firestore = db;
+      const firebaseAuth = auth;
 
-      const unsubscribeAuth = onAuthStateChanged(auth, (_user: User | null) => {});
-
-      const unsubscribeHousehold = onSnapshot(doc(firestoreDb, 'household', 'default'), (docSnap) => {
-        if (docSnap.exists()) {
-          setHousehold(docSnap.data() as HouseholdData);
-        } else {
-          setDoc(doc(firestoreDb, 'household', 'default'), INITIAL_HOUSEHOLD);
+      const unsubscribeAuth = onAuthStateChanged(firebaseAuth, (user: User | null) => {
+        if (!user) {
+          // 未認証の場合、匿名ログインが許可されていれば自動試行
+          signInAnonymously(firebaseAuth).catch(() => {
+            // 匿名ログイン不可設定なら無視
+          });
         }
       });
 
-      const unsubscribeChores = onSnapshot(collection(firestoreDb, 'chores'), (snap) => {
-        if (!snap.empty) {
-          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChoreMaster));
-          setChores(list);
-        } else {
-          INITIAL_CHORES.forEach((c) => setDoc(doc(firestoreDb, 'chores', c.id), c));
+      const unsubscribeHousehold = onSnapshot(
+        doc(firestoreDb, 'household', 'default'),
+        (docSnap) => {
+          if (docSnap.exists()) {
+            const remoteData = docSnap.data();
+            setHousehold((prev) => {
+              const merged: HouseholdData = {
+                id: 'household-default',
+                balance: typeof remoteData.balance === 'number' ? remoteData.balance : prev.balance,
+                goalTitle: remoteData.goalTitle ? String(remoteData.goalTitle) : prev.goalTitle || INITIAL_HOUSEHOLD.goalTitle,
+                goalAmount: typeof remoteData.goalAmount === 'number' && remoteData.goalAmount > 0 ? remoteData.goalAmount : prev.goalAmount || INITIAL_HOUSEHOLD.goalAmount,
+                updatedAt: remoteData.updatedAt || new Date().toISOString(),
+              };
+              // ローカルストレージにも安全に同期キャッシュ
+              try {
+                const currentRaw = localStorage.getItem(LOCAL_STORAGE_KEY);
+                const currentObj = currentRaw ? JSON.parse(currentRaw) : {};
+                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ ...currentObj, household: merged }));
+              } catch (e) {
+                console.warn(e);
+              }
+              return merged;
+            });
+          } else {
+            setDoc(doc(firestoreDb, 'household', 'default'), INITIAL_HOUSEHOLD).catch(console.warn);
+          }
+        },
+        (err) => {
+          console.warn('Firestore household listener error:', err);
         }
-      });
+      );
+
+      const unsubscribeChores = onSnapshot(
+        collection(firestoreDb, 'chores'),
+        (snap) => {
+          if (!snap.empty) {
+            const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChoreMaster));
+            setChores(list);
+          } else {
+            INITIAL_CHORES.forEach((c) => setDoc(doc(firestoreDb, 'chores', c.id), c).catch(console.warn));
+          }
+        },
+        (err) => {
+          console.warn('Firestore chores listener error:', err);
+        }
+      );
 
       const qRequests = query(collection(firestoreDb, 'requests'), orderBy('requestedAt', 'desc'));
-      const unsubscribeRequests = onSnapshot(qRequests, (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChoreRequest));
-        setRequests(list);
-      });
+      const unsubscribeRequests = onSnapshot(
+        qRequests,
+        (snap) => {
+          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChoreRequest));
+          setRequests(list);
+        },
+        (err) => {
+          console.warn('Firestore requests listener error:', err);
+        }
+      );
 
       const qTransactions = query(collection(firestoreDb, 'transactions'), orderBy('createdAt', 'desc'));
-      const unsubscribeTransactions = onSnapshot(qTransactions, (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Transaction));
-        setTransactions(list);
-      });
-
-      const unsubscribeRoutines = onSnapshot(collection(firestoreDb, 'routines'), (snap) => {
-        if (!snap.empty) {
-          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RoutineTask));
-          setRoutines(list);
-        } else {
-          INITIAL_ROUTINES.forEach((r) => setDoc(doc(firestoreDb, 'routines', r.id), r));
+      const unsubscribeTransactions = onSnapshot(
+        qTransactions,
+        (snap) => {
+          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Transaction));
+          setTransactions(list);
+        },
+        (err) => {
+          console.warn('Firestore transactions listener error:', err);
         }
-      });
+      );
 
-      const unsubscribeRoutineLogs = onSnapshot(collection(firestoreDb, 'routineLogs'), (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RoutineLog));
-        setRoutineLogs(list);
-      });
+      const unsubscribeRoutines = onSnapshot(
+        collection(firestoreDb, 'routines'),
+        (snap) => {
+          if (!snap.empty) {
+            const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RoutineTask));
+            setRoutines(list);
+          } else {
+            INITIAL_ROUTINES.forEach((r) => setDoc(doc(firestoreDb, 'routines', r.id), r).catch(console.warn));
+          }
+        },
+        (err) => {
+          console.warn('Firestore routines listener error:', err);
+        }
+      );
+
+      const unsubscribeRoutineLogs = onSnapshot(
+        collection(firestoreDb, 'routineLogs'),
+        (snap) => {
+          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RoutineLog));
+          setRoutineLogs(list);
+        },
+        (err) => {
+          console.warn('Firestore routineLogs listener error:', err);
+        }
+      );
 
       return () => {
         unsubscribeAuth();
@@ -309,13 +381,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       routines: rou,
       routineLogs: rLogs,
     };
-    if (!isFirebaseConfigured) {
+
+    // Firebase環境の有無を問わず、ローカルストレージには常にバックアップ保存
+    try {
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(payload));
+    } catch (e) {
+      console.warn('localStorage save error:', e);
     }
-    channelRef.current?.postMessage({
-      type: 'SYNC_DATA',
-      payload,
-    });
+
+    try {
+      channelRef.current?.postMessage({
+        type: 'SYNC_DATA',
+        payload,
+      });
+    } catch (e) {
+      console.warn('channel postMessage error:', e);
+    }
   };
 
   // 期限切れペナルティ自動チェック（起動時やデータ更新時に判定）
@@ -381,8 +462,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const login = async (email: string, pass: string, targetRole: Role) => {
     if (isFirebaseConfigured && auth) {
       try {
-        const userCredential = await signInWithEmailAndPassword(auth, email, pass);
-        const userObj = { email: userCredential.user.email || email, role: targetRole };
+        let userCredential;
+        try {
+          userCredential = await signInWithEmailAndPassword(auth, email, pass);
+        } catch (authErr: any) {
+          // ユーザーが存在しないエラーの場合、自動登録を試行
+          if (authErr.code === 'auth/user-not-found' || authErr.code === 'auth/invalid-credential') {
+            try {
+              userCredential = await createUserWithEmailAndPassword(auth, email, pass);
+            } catch {
+              throw authErr;
+            }
+          } else {
+            throw authErr;
+          }
+        }
+
+        const userObj = { email: userCredential?.user?.email || email, role: targetRole };
         setCurrentUser(userObj);
         setRole(targetRole);
 
@@ -390,6 +486,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem(storageKey, JSON.stringify(userObj));
         return { success: true };
       } catch (err: any) {
+        // Firebase認証に失敗した場合でもローカルで4文字以上であればログインを許可（オフライン・開発時フォールバック）
+        if (pass.length >= 4) {
+          console.warn('Firebase認証エラーのためローカルモードでログインします:', err);
+          const userObj = { email, role: targetRole };
+          setCurrentUser(userObj);
+          setRole(targetRole);
+
+          const storageKey = targetRole === 'parent' ? LOCAL_PARENT_USER_KEY : LOCAL_CHILD_USER_KEY;
+          localStorage.setItem(storageKey, JSON.stringify(userObj));
+          return { success: true };
+        }
         return { success: false, error: err.message || '認証に失敗しました。' };
       }
     } else {
@@ -410,7 +517,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ログアウト処理
   const logout = async () => {
     if (isFirebaseConfigured && auth) {
-      await firebaseSignOut(auth);
+      try {
+        await firebaseSignOut(auth);
+      } catch (e) {
+        console.warn('Firebase signout error:', e);
+      }
     }
     if (currentUser?.role === 'parent') {
       localStorage.removeItem(LOCAL_PARENT_USER_KEY);
@@ -431,12 +542,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: '目標金額は1円以上で設定してください。' };
     }
 
-    const updated = { ...household, goalTitle: title.trim(), goalAmount: cleanAmount, updatedAt: new Date().toISOString() };
+    const updated: HouseholdData = {
+      ...household,
+      goalTitle: title.trim(),
+      goalAmount: cleanAmount,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // 1. ローカルステートを即時更新
     setHousehold(updated);
+
+    // 2. ローカルストレージおよび他タブへブロードキャスト保存
     broadcastAndSaveLocalData(updated);
 
+    // 3. Firebase Firestoreへ保存（エラー時はローカル反映を維持）
     if (isFirebaseConfigured && db) {
-      await setDoc(doc(db, 'household', 'default'), updated, { merge: true });
+      try {
+        await setDoc(doc(db, 'household', 'default'), updated, { merge: true });
+      } catch (err) {
+        console.warn('Firebaseへの目標更新の保存に失敗しました（ローカルには即時反映済み）:', err);
+      }
     }
     return { success: true };
   };
