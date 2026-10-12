@@ -9,14 +9,30 @@
 /* 文字サイズ設定クラス（アカウント毎にhtmlまたはrootに適用） */
 html.font-size-small {
   font-size: 14px;
+  line-height: 1.45;
 }
 
 html.font-size-medium {
   font-size: 16px;
+  line-height: 1.5;
 }
 
 html.font-size-large {
   font-size: 18px;
+  line-height: 1.6;
+}
+
+/* 文字サイズ「大」選択時のカードや折り返し要素の余白をゆったり調整 */
+html.font-size-large .p-3\.5 {
+  padding: 1rem;
+}
+
+html.font-size-large .p-4 {
+  padding: 1.15rem;
+}
+
+html.font-size-large .p-5 {
+  padding: 1.35rem;
 }
 
 body {

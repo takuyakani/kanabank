@@ -800,24 +800,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let nextBalance = household.balance;
     let nextTxs = transactions;
 
-    // ご褒美金額がゼロ超の場合は残高加算＆取引履歴作成
+    // 取引履歴（カレンダー反映用）を作成
+    // ご褒美が0円の場合でも「いつもやること達成（0円）」としてカレンダーに記録
     if (rLog.reward > 0) {
       nextBalance = household.balance + rLog.reward;
-      const newTx: Transaction = {
-        id: `tx-routine-${Date.now()}`,
-        type: 'chore',
-        title: `いつもやること達成: ${rLog.title}`,
-        amount: rLog.reward,
-        date: todayDate,
-        createdAt: nowIso,
-        createdBy: currentActor,
-        note: `${rLog.targetDate}実施分を承認`,
-      };
-      nextTxs = [newTx, ...transactions];
+    }
 
-      if (isFirebaseConfigured && db) {
-        await setDoc(doc(db, 'transactions', newTx.id), newTx);
-      }
+    const newTx: Transaction = {
+      id: `tx-routine-${Date.now()}`,
+      type: 'chore',
+      title: `いつもやること達成: ${rLog.title}`,
+      amount: rLog.reward, // 0円の場合も0として記録
+      date: todayDate,
+      createdAt: nowIso,
+      createdBy: currentActor,
+      note: `${rLog.targetDate}実施分を承認${rLog.reward === 0 ? '（習慣達成・ご褒美なし）' : ''}`,
+    };
+    nextTxs = [newTx, ...transactions];
+
+    if (isFirebaseConfigured && db) {
+      await setDoc(doc(db, 'transactions', newTx.id), newTx);
     }
 
     const updatedHousehold = { ...household, balance: nextBalance, updatedAt: nowIso };

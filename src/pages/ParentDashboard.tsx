@@ -277,6 +277,8 @@ export const ParentDashboard: React.FC = () => {
       });
     }
     setIsEditingRoutine(false);
+    setRoutineSavedSuccess(true);
+    setTimeout(() => setRoutineSavedSuccess(false), 3000);
   };
 
   const confirmDeleteChore = async () => {
@@ -291,20 +293,58 @@ export const ParentDashboard: React.FC = () => {
     setDeletingRoutine(null);
   };
 
-  const handleSaveFirebaseConfig = (e: React.FormEvent) => {
+  const [routineSavedSuccess, setRoutineSavedSuccess] = useState(false);
+  const [isTestingFb, setIsTestingFb] = useState(false);
+
+  const handleSaveFirebaseConfig = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!fbApiKey || !fbProjectId) {
+    const cleanKey = fbApiKey.trim();
+    const cleanProjectId = fbProjectId.trim();
+
+    if (!cleanKey || !cleanProjectId) {
       setFbConfigMessage('API Key と Project ID は必須です。');
       return;
     }
 
+    // 書式チェック: APIキーはAIzaで始まる39文字程度、プロジェクトIDは英小文字・数字・ハイフン
+    if (!cleanKey.startsWith('AIza') || cleanKey.length < 30) {
+      setFbConfigMessage('API Key の形式が正しくありません（"AIza..." で始まる有効なキーを入力してください）。');
+      return;
+    }
+
+    if (!/^[a-z0-9-]+$/.test(cleanProjectId)) {
+      setFbConfigMessage('Project ID には英小文字、数字、ハイフンのみ使用できます。');
+      return;
+    }
+
+    setIsTestingFb(true);
+    setFbConfigMessage('接続テストを実行中...');
+
+    try {
+      // Firebase REST API エンドポイントへの疎通チェック
+      const testUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(cleanProjectId)}/databases/(default)/documents?key=${encodeURIComponent(cleanKey)}`;
+      const res = await fetch(testUrl, { method: 'GET' });
+
+      // 400番台のうち、無効なAPIキーや存在しないプロジェクトは拒絶
+      if (res.status === 400 || res.status === 403 || res.status === 404) {
+        const errorData = await res.json().catch(() => null);
+        const errMsg = errorData?.error?.message || 'APIキーまたはプロジェクトIDが無効です。';
+        setFbConfigMessage(`接続に失敗しました: ${errMsg}`);
+        setIsTestingFb(false);
+        return;
+      }
+    } catch {
+      // ネットワークオフライン時は警告しつつローカル保存案内
+    }
+
+    setIsTestingFb(false);
     const config: FirebaseCustomConfig = {
-      apiKey: fbApiKey.trim(),
-      projectId: fbProjectId.trim(),
-      authDomain: `${fbProjectId.trim()}.firebaseapp.com`,
+      apiKey: cleanKey,
+      projectId: cleanProjectId,
+      authDomain: `${cleanProjectId}.firebaseapp.com`,
     };
     saveFirebaseConfig(config);
-    setFbConfigMessage('Firebase設定を保存しました。設定を有効にするためページを再読み込みします...');
+    setFbConfigMessage('✓ Firebase設定を保存しました。設定を有効にするためページを再読み込みします...');
     setTimeout(() => {
       window.location.reload();
     }, 1200);
@@ -573,6 +613,12 @@ export const ParentDashboard: React.FC = () => {
         {/* --- タブ2: いつもやること（ルーティンマスター設定） --- */}
         {activeTab === 'routines' && (
           <div className="space-y-4">
+            {routineSavedSuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-2xl font-bold flex items-center gap-2 shadow-xs">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>「いつもやること」を保存しました！</span>
+              </div>
+            )}
             <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
               <div className="flex items-center justify-between mb-3">
                 <div>
@@ -624,35 +670,36 @@ export const ParentDashboard: React.FC = () => {
                         <span className="text-slate-400">猶予: {routine.graceDays}日</span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => {
-                          setEditingRoutineData(routine);
-                          if (routine.scheduleConfig?.daysOfWeek) setRoutineDaysOfWeek(routine.scheduleConfig.daysOfWeek);
-                          if (routine.scheduleConfig?.dayOfMonth) setRoutineDayOfMonth(routine.scheduleConfig.dayOfMonth);
-                          if (routine.scheduleConfig?.nthWeek) setRoutineNthWeek(routine.scheduleConfig.nthWeek);
-                          if (routine.scheduleConfig?.nthWeekday !== undefined) setRoutineNthWeekday(routine.scheduleConfig.nthWeekday);
-                          setIsEditingRoutine(true);
-                        }}
-                        className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200"
-                        title="編集"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => setDeletingRoutine(routine)}
-                        className="p-1.5 text-slate-400 hover:text-rose-500 rounded-lg hover:bg-rose-50"
-                        title="削除"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                        <button
+                          onClick={() => {
+                            setEditingRoutineData(routine);
+                            if (routine.scheduleConfig?.daysOfWeek) setRoutineDaysOfWeek(routine.scheduleConfig.daysOfWeek);
+                            if (routine.scheduleConfig?.dayOfMonth) setRoutineDayOfMonth(routine.scheduleConfig.dayOfMonth);
+                            if (routine.scheduleConfig?.nthWeek) setRoutineNthWeek(routine.scheduleConfig.nthWeek);
+                            if (routine.scheduleConfig?.nthWeekday !== undefined) setRoutineNthWeekday(routine.scheduleConfig.nthWeekday);
+                            setIsEditingRoutine(true);
+                          }}
+                          className="px-2.5 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition flex items-center gap-1 border border-indigo-200/60 shadow-2xs"
+                          title="このいつもやることを編集"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                          <span>編集</span>
+                        </button>
+                        <button
+                          onClick={() => setDeletingRoutine(routine)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-xl hover:bg-rose-50 transition border border-transparent hover:border-rose-100"
+                          title="削除"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
         {/* --- タブ3: 叱られたペナルティ（減額） --- */}
         {activeTab === 'penalty' && (
@@ -953,9 +1000,10 @@ export const ParentDashboard: React.FC = () => {
                 <div className="flex gap-2">
                   <button
                     type="submit"
-                    className="flex-1 py-2 bg-indigo-600 text-white font-bold rounded-xl text-xs hover:bg-indigo-700"
+                    disabled={isTestingFb}
+                    className="flex-1 py-2 bg-indigo-600 disabled:bg-indigo-400 text-white font-bold rounded-xl text-xs hover:bg-indigo-700 transition"
                   >
-                    設定を更新
+                    {isTestingFb ? '接続テスト中...' : '設定を更新'}
                   </button>
                   {currentSavedConfig && (
                     <button
