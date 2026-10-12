@@ -78,8 +78,13 @@ interface AppContextType {
   reportRoutineDone: (routineId: string, targetDate: string) => Promise<void>;
   approveRoutineLog: (logId: string) => Promise<{ success: boolean; error?: string }>;
   checkAndApplyOverduePenalties: () => Promise<void>;
+  // クラウド同期状態
+  syncStatus: 'connected' | 'syncing' | 'error' | 'local';
+  syncErrorMessage: string | null;
   // 履歴管理
   clearAllTransactions: () => Promise<void>;
+  restoreTransactions: (txs: Transaction[]) => Promise<void>;
+  importBackupData: (backup: any) => Promise<{ success: boolean; error?: string }>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -93,6 +98,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [role, setRole] = useState<Role | null>(null);
   const [currentUser, setCurrentUser] = useState<{ email: string; role: Role } | null>(null);
   const [isDemoMode, setIsDemoMode] = useState<boolean>(!isFirebaseConfigured);
+  const [syncStatus, setSyncStatus] = useState<'connected' | 'syncing' | 'error' | 'local'>(
+    isFirebaseConfigured ? 'syncing' : 'local'
+  );
+  const [syncErrorMessage, setSyncErrorMessage] = useState<string | null>(null);
 
   // データステート
   const [household, setHousehold] = useState<HouseholdData>(INITIAL_HOUSEHOLD);
@@ -263,10 +272,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!isFirebaseConfigured) {
       setIsDemoMode(true);
+      setSyncStatus('local');
+      setSyncErrorMessage(null);
     } else {
       if (!auth || !db) return;
       const firestoreDb: Firestore = db;
       const firebaseAuth = auth;
+
+      const handleSyncSuccess = () => {
+        setSyncStatus('connected');
+        setSyncErrorMessage(null);
+        setIsDemoMode(false);
+      };
+
+      const handleSyncError = (err: any, contextName: string) => {
+        console.warn(`Firestore ${contextName} listener error:`, err);
+        setSyncStatus('error');
+        const code = err?.code || '';
+        if (code === 'permission-denied' || String(err).includes('Missing or insufficient permissions')) {
+          setSyncErrorMessage('Firestoreセキュリティルールによりアクセスが拒否されました（権限不足 / Missing or insufficient permissions）。');
+        } else if (code === 'unavailable' || String(err).includes('network')) {
+          setSyncErrorMessage('Firebaseへのネットワーク接続に失敗しました（オフラインまたはCORS制限）。');
+        } else {
+          setSyncErrorMessage(err?.message || 'Firestore接続エラーが発生しました。');
+        }
+      };
 
       const unsubscribeAuth = onAuthStateChanged(firebaseAuth, (user: User | null) => {
         if (!user) {
@@ -280,6 +310,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const unsubscribeHousehold = onSnapshot(
         doc(firestoreDb, 'household', 'default'),
         (docSnap) => {
+          handleSyncSuccess();
           if (docSnap.exists()) {
             const remoteData = docSnap.data();
             setHousehold((prev) => {
@@ -305,13 +336,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         },
         (err) => {
-          console.warn('Firestore household listener error:', err);
+          handleSyncError(err, 'household');
         }
       );
 
       const unsubscribeChores = onSnapshot(
         collection(firestoreDb, 'chores'),
         (snap) => {
+          handleSyncSuccess();
           if (!snap.empty) {
             const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChoreMaster));
             setChores(list);
@@ -320,7 +352,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         },
         (err) => {
-          console.warn('Firestore chores listener error:', err);
+          handleSyncError(err, 'chores');
         }
       );
 
@@ -328,11 +360,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const unsubscribeRequests = onSnapshot(
         qRequests,
         (snap) => {
+          handleSyncSuccess();
           const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChoreRequest));
           setRequests(list);
         },
         (err) => {
-          console.warn('Firestore requests listener error:', err);
+          handleSyncError(err, 'requests');
         }
       );
 
@@ -340,17 +373,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const unsubscribeTransactions = onSnapshot(
         qTransactions,
         (snap) => {
+          handleSyncSuccess();
           const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Transaction));
           setTransactions(list);
         },
         (err) => {
-          console.warn('Firestore transactions listener error:', err);
+          handleSyncError(err, 'transactions');
         }
       );
 
       const unsubscribeRoutines = onSnapshot(
         collection(firestoreDb, 'routines'),
         (snap) => {
+          handleSyncSuccess();
           if (!snap.empty) {
             const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RoutineTask));
             setRoutines(list);
@@ -359,18 +394,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         },
         (err) => {
-          console.warn('Firestore routines listener error:', err);
+          handleSyncError(err, 'routines');
         }
       );
 
       const unsubscribeRoutineLogs = onSnapshot(
         collection(firestoreDb, 'routineLogs'),
         (snap) => {
+          handleSyncSuccess();
           const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RoutineLog));
           setRoutineLogs(list);
         },
         (err) => {
-          console.warn('Firestore routineLogs listener error:', err);
+          handleSyncError(err, 'routineLogs');
         }
       );
 
@@ -1149,6 +1185,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // 削除した履歴の取り消し（Undo）・復元
+  const restoreTransactions = async (txs: Transaction[]) => {
+    setTransactions(txs);
+    broadcastAndSaveLocalData(undefined, undefined, undefined, txs);
+
+    if (isFirebaseConfigured && db) {
+      const firestoreDb: Firestore = db;
+      try {
+        await Promise.all(
+          txs.map((tx) => setDoc(doc(firestoreDb, 'transactions', tx.id), tx, { merge: true }))
+        );
+      } catch (err) {
+        console.warn('Firebase sync error during restoreTransactions:', err);
+      }
+    }
+  };
+
+  // バックアップJSONからのデータ復元
+  const importBackupData = async (backup: any): Promise<{ success: boolean; error?: string }> => {
+    try {
+      if (!backup || typeof backup !== 'object') {
+        return { success: false, error: 'バックアップファイルの形式が無効です。' };
+      }
+
+      const newHousehold: HouseholdData =
+        backup.household && typeof backup.household.balance === 'number'
+          ? { ...INITIAL_HOUSEHOLD, ...backup.household }
+          : household;
+      const newChores = Array.isArray(backup.chores) ? backup.chores : chores;
+      const newRequests = Array.isArray(backup.requests) ? backup.requests : requests;
+      const newTransactions = Array.isArray(backup.transactions) ? backup.transactions : transactions;
+      const newRoutines = Array.isArray(backup.routines) ? backup.routines : routines;
+      const newRoutineLogs = Array.isArray(backup.routineLogs) ? backup.routineLogs : routineLogs;
+
+      setHousehold(newHousehold);
+      setChores(newChores);
+      setRequests(newRequests);
+      setTransactions(newTransactions);
+      setRoutines(newRoutines);
+      setRoutineLogs(newRoutineLogs);
+
+      broadcastAndSaveLocalData(
+        newHousehold,
+        newChores,
+        newRequests,
+        newTransactions,
+        newRoutines,
+        newRoutineLogs
+      );
+
+      if (isFirebaseConfigured && db) {
+        const firestoreDb: Firestore = db;
+        try {
+          await setDoc(doc(firestoreDb, 'household', 'default'), newHousehold, { merge: true });
+          await Promise.all([
+            ...newChores.map((c: any) => setDoc(doc(firestoreDb, 'chores', c.id), c, { merge: true })),
+            ...newRequests.map((r: any) => setDoc(doc(firestoreDb, 'requests', r.id), r, { merge: true })),
+            ...newTransactions.map((t: any) => setDoc(doc(firestoreDb, 'transactions', t.id), t, { merge: true })),
+            ...newRoutines.map((rou: any) => setDoc(doc(firestoreDb, 'routines', rou.id), rou, { merge: true })),
+            ...newRoutineLogs.map((rl: any) => setDoc(doc(firestoreDb, 'routineLogs', rl.id), rl, { merge: true })),
+          ]);
+        } catch (err) {
+          console.warn('Firebase sync error during backup restore:', err);
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      console.error('バックアップインポートエラー:', err);
+      return { success: false, error: err?.message || 'バックアップの復元に失敗しました。' };
+    }
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -1165,6 +1274,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         textMode,
         setTextMode,
         isDemoMode,
+        syncStatus,
+        syncErrorMessage,
         login,
         logout,
         updateGoal,
@@ -1186,6 +1297,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         approveRoutineLog,
         checkAndApplyOverduePenalties,
         clearAllTransactions,
+        restoreTransactions,
+        importBackupData,
       }}
     >
       {children}

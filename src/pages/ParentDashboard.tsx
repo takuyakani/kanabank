@@ -8,7 +8,7 @@ import {
   getSavedFirebaseConfig,
   type FirebaseCustomConfig
 } from '../lib/firebase';
-import type { ChoreMaster, RoutineTask, RoutineLog, ScheduleType } from '../types';
+import type { ChoreMaster, RoutineTask, RoutineLog, ScheduleType, Transaction } from '../types';
 import { formatScheduleDescription } from '../utils/scheduleUtils';
 import {
   Check,
@@ -34,7 +34,12 @@ import {
   AlertCircle,
   Download,
   Banknote,
-  ShieldAlert
+  ShieldAlert,
+  RefreshCw,
+  Copy,
+  CheckCheck,
+  Upload,
+  Undo2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -64,7 +69,11 @@ export const ParentDashboard: React.FC = () => {
     deleteRoutine,
     approveRoutineLog,
     clearAllTransactions,
+    restoreTransactions,
+    importBackupData,
     updateBalance,
+    syncStatus,
+    syncErrorMessage,
     logout,
   } = useApp();
 
@@ -149,6 +158,17 @@ export const ParentDashboard: React.FC = () => {
   const [clearHistorySuccess, setClearHistorySuccess] = useState(false);
   const [backupDownloaded, setBackupDownloaded] = useState(false);
 
+  // Undoトースト & バックアップ復元
+  const [undoClearToast, setUndoClearToast] = useState<{ txs: Transaction[]; count: number } | null>(null);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
+
+  // Firestoreルールモーダル & ファミリー共有
+  const [showRulesModal, setShowRulesModal] = useState(false);
+  const [copiedRules, setCopiedRules] = useState(false);
+  const [copiedInviteUrl, setCopiedInviteUrl] = useState(false);
+  const [copiedConfigCode, setCopiedConfigCode] = useState(false);
+  const [pasteConfigCodeInput, setPasteConfigCodeInput] = useState('');
+
   // 全モーダルのESCキー閉じハンドリング
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -162,6 +182,7 @@ export const ParentDashboard: React.FC = () => {
         setApprovingId(null);
         setShowPenaltyConfirm(false);
         setShowClearHistoryConfirm(false);
+        setShowRulesModal(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -217,7 +238,8 @@ export const ParentDashboard: React.FC = () => {
     const isCustom = approvingReq.choreId === 'custom';
     const rewardToGive = isCustom ? Number(customRewardInput) : (approvingReq.reward + Number(bonusInput));
     
-    if (isCustom && (isNaN(Number(customRewardInput)) || Number(customRewardInput) < 0)) {
+    if (isCustom && (isNaN(Number(customRewardInput)) || Number(customRewardInput) < 1 || Number(customRewardInput) > 100000)) {
+      alert('自由入力お手伝いの金額は 1円〜100,000円 の範囲で設定してください。');
       return;
     }
 
@@ -481,9 +503,7 @@ export const ParentDashboard: React.FC = () => {
   };
 
   const [routineSavedSuccess, setRoutineSavedSuccess] = useState(false);
-  const [isTestingFb, setIsTestingFb] = useState(false);
-
-  const handleSaveFirebaseConfig = async (e: React.FormEvent) => {
+  const handleSaveFirebaseConfig = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanKey = fbApiKey.trim();
     const cleanProjectId = fbProjectId.trim();
@@ -493,7 +513,6 @@ export const ParentDashboard: React.FC = () => {
       return;
     }
 
-    // 書式チェック: APIキーはAIzaで始まる39文字程度、プロジェクトIDは英小文字・数字・ハイフン
     if (!cleanKey.startsWith('AIza') || cleanKey.length < 30) {
       setFbConfigMessage('API Key の形式が正しくありません（"AIza..." で始まる有効なキーを入力してください）。');
       return;
@@ -504,27 +523,6 @@ export const ParentDashboard: React.FC = () => {
       return;
     }
 
-    setIsTestingFb(true);
-    setFbConfigMessage('接続テストを実行中...');
-
-    try {
-      // Firebase REST API エンドポイントへの疎通チェック
-      const testUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(cleanProjectId)}/databases/(default)/documents?key=${encodeURIComponent(cleanKey)}`;
-      const res = await fetch(testUrl, { method: 'GET' });
-
-      // 400番台のうち、無効なAPIキーや存在しないプロジェクトは拒絶
-      if (res.status === 400 || res.status === 403 || res.status === 404) {
-        const errorData = await res.json().catch(() => null);
-        const errMsg = errorData?.error?.message || 'APIキーまたはプロジェクトIDが無効です。';
-        setFbConfigMessage(`接続に失敗しました: ${errMsg}`);
-        setIsTestingFb(false);
-        return;
-      }
-    } catch {
-      // ネットワークオフライン時は警告しつつローカル保存案内
-    }
-
-    setIsTestingFb(false);
     const config: FirebaseCustomConfig = {
       apiKey: cleanKey,
       projectId: cleanProjectId,
@@ -534,7 +532,7 @@ export const ParentDashboard: React.FC = () => {
     setFbConfigMessage('✓ Firebase設定を保存しました。設定を有効にするためページを再読み込みします...');
     setTimeout(() => {
       window.location.reload();
-    }, 1200);
+    }, 800);
   };
 
   const handleClearFirebaseConfig = () => {
@@ -542,7 +540,105 @@ export const ParentDashboard: React.FC = () => {
     setFbConfigMessage('設定を削除しました。ローカルモードに戻すためページを再読み込みします...');
     setTimeout(() => {
       window.location.reload();
-    }, 1200);
+    }, 800);
+  };
+
+  // ファミリー招待リンクの生成・コピー
+  const handleCopyInviteUrl = () => {
+    const activeKey = fbApiKey || currentSavedConfig?.apiKey;
+    const activeProject = fbProjectId || currentSavedConfig?.projectId;
+    if (!activeKey || !activeProject) return;
+
+    const payload = btoa(encodeURIComponent(JSON.stringify({ apiKey: activeKey, projectId: activeProject })));
+    const origin = window.location.origin;
+    const pathname = window.location.pathname;
+    const url = `${origin}${pathname}#/?firebase_config=${payload}`;
+    navigator.clipboard.writeText(url);
+    setCopiedInviteUrl(true);
+    setTimeout(() => setCopiedInviteUrl(false), 3000);
+  };
+
+  // 設定コード（Base64文字列）のコピー
+  const handleCopyConfigCode = () => {
+    const activeKey = fbApiKey || currentSavedConfig?.apiKey;
+    const activeProject = fbProjectId || currentSavedConfig?.projectId;
+    if (!activeKey || !activeProject) return;
+
+    const payload = btoa(encodeURIComponent(JSON.stringify({ apiKey: activeKey, projectId: activeProject })));
+    navigator.clipboard.writeText(payload);
+    setCopiedConfigCode(true);
+    setTimeout(() => setCopiedConfigCode(false), 3000);
+  };
+
+  // 設定コードからの反映
+  const handleApplyConfigCode = (codeStr: string) => {
+    try {
+      const decoded = JSON.parse(decodeURIComponent(atob(codeStr.trim())));
+      if (decoded.apiKey && decoded.projectId) {
+        saveFirebaseConfig(decoded);
+        setFbConfigMessage('✓ 設定コードを読み込みました。有効化のため再読み込みします...');
+        setTimeout(() => window.location.reload(), 800);
+      } else {
+        setFbConfigMessage('設定コードに必要な項目が含まれていません。');
+      }
+    } catch {
+      setFbConfigMessage('無効な設定コードです。');
+    }
+  };
+
+  // バックアップJSONファイルからの復元（インポート）
+  const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+        const res = await importBackupData(parsed);
+        if (res.success) {
+          setImportMessage('✓ バックアップデータを正常に復元しました！');
+          confetti({ particleCount: 80, spread: 70, origin: { y: 0.5 } });
+        } else {
+          setImportMessage(`復元失敗: ${res.error}`);
+        }
+      } catch {
+        setImportMessage('無効なJSONファイルです。');
+      }
+      setTimeout(() => setImportMessage(null), 5000);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  // 全履歴削除の実行
+  const handleExecuteClearAll = async () => {
+    if (isClearingHistory) return;
+    setIsClearingHistory(true);
+    try {
+      const backupTxs = [...transactions];
+      await clearAllTransactions();
+      setShowClearHistoryConfirm(false);
+      setClearHistorySuccess(true);
+      setTimeout(() => setClearHistorySuccess(false), 4000);
+
+      // 直後10秒間のUndo（元に戻す）トーストを表示
+      setUndoClearToast({ txs: backupTxs, count: backupTxs.length });
+    } catch (err) {
+      console.error('全履歴削除エラー:', err);
+    } finally {
+      setIsClearingHistory(false);
+    }
+  };
+
+  // 履歴削除の取り消し（Undo）
+  const handleUndoClear = async () => {
+    if (!undoClearToast) return;
+    const restoreList = undoClearToast.txs;
+    setUndoClearToast(null);
+    await restoreTransactions(restoreList);
+    confetti({ particleCount: 60, spread: 70, origin: { y: 0.7 } });
   };
 
   const isPenaltyValid = Boolean(penaltyReason.trim() && penaltyAmount >= 1);
@@ -560,17 +656,44 @@ export const ParentDashboard: React.FC = () => {
             <h1 className="text-sm font-extrabold leading-tight">保護者ダッシュボード</h1>
             <div className="flex items-center gap-1.5 mt-0.5">
               <span className="text-[10px] text-indigo-200">残高: {household.balance} 円</span>
-              <span className="text-[9px] px-1.5 py-0.2 rounded-full font-bold flex items-center gap-0.5 bg-indigo-800 text-indigo-200">
-                {!isDemoMode ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (syncStatus === 'error') setShowRulesModal(true);
+                  else setActiveTab('settings');
+                }}
+                className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold flex items-center gap-1 transition ${
+                  syncStatus === 'connected'
+                    ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30'
+                    : syncStatus === 'syncing'
+                    ? 'bg-amber-950/60 text-amber-300 border border-amber-500/30'
+                    : syncStatus === 'error'
+                    ? 'bg-rose-950/80 text-rose-300 border border-rose-500/50 hover:bg-rose-900 cursor-pointer animate-pulse'
+                    : 'bg-indigo-800 text-indigo-200'
+                }`}
+                title="同期ステータスを確認"
+              >
+                {syncStatus === 'connected' && (
                   <>
                     <Cloud className="w-2.5 h-2.5 text-emerald-400" /> クラウド同期中
                   </>
-                ) : (
+                )}
+                {syncStatus === 'syncing' && (
+                  <>
+                    <RefreshCw className="w-2.5 h-2.5 text-amber-300 animate-spin" /> 同期確認中...
+                  </>
+                )}
+                {syncStatus === 'error' && (
+                  <>
+                    <ShieldAlert className="w-2.5 h-2.5 text-rose-400" /> 同期エラー（設定確認）
+                  </>
+                )}
+                {syncStatus === 'local' && (
                   <>
                     <HardDrive className="w-2.5 h-2.5 text-amber-300" /> ローカル保存
                   </>
                 )}
-              </span>
+              </button>
             </div>
           </div>
         </div>
@@ -629,6 +752,59 @@ export const ParentDashboard: React.FC = () => {
 
       {/* メインコンテンツ */}
       <main className="p-4 space-y-4 flex-1">
+        {/* クラウド同期エラー警告バナー */}
+        {syncStatus === 'error' && (
+          <div className="p-3.5 bg-rose-50 border-2 border-rose-300 rounded-2xl text-xs text-rose-950 flex items-start justify-between gap-2 shadow-sm animate-fade-in">
+            <div className="flex items-start gap-2.5">
+              <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-extrabold text-xs text-rose-900 leading-tight">
+                  クラウド同期エラー（権限不足 または 設定エラー）
+                </p>
+                <p className="text-[11px] text-rose-700 mt-1 leading-snug">
+                  {syncErrorMessage || 'Firestoreのセキュリティルールで読み書きがブロックされている可能性があります。'}
+                </p>
+                <p className="text-[10px] text-rose-500 mt-1 font-semibold">
+                  ※ ルールを「すべてのユーザーに許可」に設定すると解決します。
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowRulesModal(true)}
+              className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] rounded-xl transition shrink-0 shadow-xs"
+            >
+              解決手順
+            </button>
+          </div>
+        )}
+
+        {/* 履歴削除取り消し（Undo）トースト通知 */}
+        {undoClearToast && (
+          <div className="p-3 bg-slate-900 text-white text-xs rounded-2xl font-bold flex items-center justify-between gap-3 shadow-lg animate-fade-in border border-slate-700">
+            <div className="flex items-center gap-2">
+              <Trash2 className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>全履歴（{undoClearToast.count}件）を削除しました</span>
+            </div>
+            <button
+              onClick={handleUndoClear}
+              className="px-3 py-1 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs rounded-xl transition flex items-center gap-1 shrink-0 shadow-xs"
+            >
+              <Undo2 className="w-3.5 h-3.5" />
+              元に戻す
+            </button>
+          </div>
+        )}
+
+        {/* バックアップ復元結果メッセージ */}
+        {importMessage && (
+          <div className={`p-3 text-xs rounded-2xl font-bold flex items-center gap-2 shadow-sm animate-fade-in border ${
+            importMessage.startsWith('✓') ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+          }`}>
+            <Check className="w-4 h-4 shrink-0" />
+            <span>{importMessage}</span>
+          </div>
+        )}
+
         {/* クラウド未設定・ローカル保存モードの案内バナー */}
         {isDemoMode && activeTab !== 'settings' && (
           <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-2xl text-xs text-amber-900 flex items-center justify-between gap-2 shadow-xs">
@@ -1290,26 +1466,157 @@ export const ParentDashboard: React.FC = () => {
             </div>
 
             <div className={`p-4 rounded-2xl border text-xs space-y-2 ${
-              !isDemoMode ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
+              syncStatus === 'connected'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : syncStatus === 'error'
+                ? 'bg-rose-50 border-rose-200 text-rose-900'
+                : syncStatus === 'syncing'
+                ? 'bg-amber-50 border-amber-200 text-amber-900'
+                : 'bg-slate-50 border-slate-200 text-slate-800'
             }`}>
-              <div className="flex items-center gap-2 font-bold text-sm">
-                {!isDemoMode ? (
-                  <>
-                    <Cloud className="w-5 h-5 text-emerald-600 shrink-0" />
-                    <span>☁️ クラウド同期：有効</span>
-                  </>
-                ) : (
-                  <>
-                    <HardDrive className="w-5 h-5 text-amber-600 shrink-0" />
-                    <span>⚠️ ローカル保存モードで動作中</span>
-                  </>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-bold text-sm">
+                  {syncStatus === 'connected' && (
+                    <>
+                      <Cloud className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <span>☁️ クラウド同期：正常に接続中</span>
+                    </>
+                  )}
+                  {syncStatus === 'syncing' && (
+                    <>
+                      <RefreshCw className="w-5 h-5 text-amber-600 shrink-0 animate-spin" />
+                      <span>クラウド同期を確認中...</span>
+                    </>
+                  )}
+                  {syncStatus === 'error' && (
+                    <>
+                      <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0" />
+                      <span>⚠️ クラウド同期エラー（設定・権限）</span>
+                    </>
+                  )}
+                  {syncStatus === 'local' && (
+                    <>
+                      <HardDrive className="w-5 h-5 text-slate-600 shrink-0" />
+                      <span>💻 ローカル保存モードで動作中</span>
+                    </>
+                  )}
+                </div>
+                {syncStatus === 'error' && (
+                  <button
+                    type="button"
+                    onClick={() => setShowRulesModal(true)}
+                    className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold text-[10px] rounded-lg transition"
+                  >
+                    ルール設定手順
+                  </button>
                 )}
               </div>
-              <p className="leading-relaxed">
-                {!isDemoMode
-                  ? 'Firebaseクラウドに接続されています。親2名・子1名のすべての端末間で残高・お手伝い・履歴がリアルタイムに共有されます。'
-                  : '環境変数（GitHub Secretsまたは.env）が設定されると、自動的にクラウド同期モードに切り替わります。'}
+              <p className="leading-relaxed text-[11px]">
+                {syncStatus === 'connected' &&
+                  'Firebaseクラウドに正常接続されています。親と子のすべての端末間で残高・お手伝い・履歴がリアルタイムに共有されます。'}
+                {syncStatus === 'syncing' &&
+                  'クラウドサーバーと接続確認を行っています。数秒お待ちください。'}
+                {syncStatus === 'error' &&
+                  'Firebaseには設定されていますが、Firestoreのセキュリティルールによりアクセスがブロックされているか、設定が誤っています。下の「ルール設定手順」を確認してください。'}
+                {syncStatus === 'local' &&
+                  '環境変数または手動設定が未登録のため、このブラウザローカル内のみで動作しています。複数端末で共有するには下記で設定を行ってください。'}
               </p>
+            </div>
+
+            {/* ファミリー招待・端末共有セクション */}
+            <div className="p-4 rounded-2xl bg-indigo-50/70 border border-indigo-100 space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <h4 className="font-extrabold text-indigo-950 flex items-center gap-1.5">
+                  <Coins className="w-4 h-4 text-indigo-600" />
+                  ファミリー招待・端末共有
+                </h4>
+                <span className="text-[10px] text-indigo-600 font-bold bg-indigo-100/80 px-2 py-0.5 rounded-full">
+                  合流用
+                </span>
+              </div>
+              <p className="text-slate-600 text-[11px] leading-relaxed">
+                子ども端末やパートナーのスマートフォンに同じFirebase接続設定をワンタップで共有できます。
+              </p>
+
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleCopyInviteUrl}
+                  className="p-2.5 bg-white border border-indigo-200 hover:border-indigo-400 rounded-xl font-bold text-[11px] text-indigo-800 flex items-center justify-center gap-1.5 shadow-2xs transition"
+                >
+                  {copiedInviteUrl ? <CheckCheck className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4 text-indigo-600" />}
+                  <span>{copiedInviteUrl ? 'URLコピー完了！' : '招待リンクをコピー'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCopyConfigCode}
+                  className="p-2.5 bg-white border border-indigo-200 hover:border-indigo-400 rounded-xl font-bold text-[11px] text-indigo-800 flex items-center justify-center gap-1.5 shadow-2xs transition"
+                >
+                  {copiedConfigCode ? <CheckCheck className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4 text-indigo-600" />}
+                  <span>{copiedConfigCode ? 'コードコピー完了！' : '設定コードをコピー'}</span>
+                </button>
+              </div>
+
+              {/* 設定コード貼り付け・適用 */}
+              <div className="pt-2 border-t border-indigo-100/80">
+                <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                  ほかの端末から受け取った「設定コード」を貼り付けて合流:
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={pasteConfigCodeInput}
+                    onChange={(e) => setPasteConfigCodeInput(e.target.value)}
+                    placeholder="設定コードを貼り付け..."
+                    className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-[11px] font-mono focus:outline-indigo-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleApplyConfigCode(pasteConfigCodeInput)}
+                    disabled={!pasteConfigCodeInput.trim()}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-[11px] rounded-xl transition shrink-0"
+                  >
+                    反映
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* バックアップと復元（インポート）セクション */}
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-3 text-xs">
+              <h4 className="font-extrabold text-slate-800 flex items-center gap-1.5">
+                <Download className="w-4 h-4 text-slate-600" />
+                データのバックアップと復元
+              </h4>
+              <p className="text-slate-500 text-[11px] leading-relaxed">
+                全データ（残高・お手伝い・ルーティン・履歴）をJSONファイルとして保存したり、以前のファイルから復元できます。
+              </p>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleDownloadBackup}
+                  className="flex-1 py-2 px-3 bg-white border border-slate-200 hover:border-slate-300 text-slate-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition shadow-2xs"
+                >
+                  <Download className="w-4 h-4 text-slate-600" />
+                  <span>JSONバックアップ保存</span>
+                </button>
+
+                <label className="flex-1 py-2 px-3 bg-white border border-slate-200 hover:border-slate-300 text-slate-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer">
+                  <Upload className="w-4 h-4 text-slate-600" />
+                  <span>ファイルから復元</span>
+                  <input
+                    type="file"
+                    accept=".json"
+                    onChange={handleImportBackup}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+              {backupDownloaded && (
+                <p className="text-[11px] text-emerald-600 font-bold">✓ バックアップJSONを保存しました</p>
+              )}
             </div>
 
             <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-2 text-xs">
@@ -1325,7 +1632,7 @@ export const ParentDashboard: React.FC = () => {
             {/* 詳細設定アコーディオン */}
             <details className="text-xs border-t border-slate-100 pt-3 text-slate-500">
               <summary className="font-semibold cursor-pointer hover:text-indigo-600 py-1">
-                ⚙️ 手動設定・デバッグ用オーバーライド
+                ⚙️ 手動Firebase設定（上級者・直接入力）
               </summary>
               <form onSubmit={handleSaveFirebaseConfig} className="space-y-3 pt-3">
                 {fbConfigMessage && (
@@ -1358,16 +1665,15 @@ export const ParentDashboard: React.FC = () => {
                 <div className="flex gap-2">
                   <button
                     type="submit"
-                    disabled={isTestingFb}
-                    className="flex-1 py-2 bg-indigo-600 disabled:bg-indigo-400 text-white font-bold rounded-xl text-xs hover:bg-indigo-700 transition"
+                    className="flex-1 py-2 bg-indigo-600 text-white font-bold rounded-xl text-xs hover:bg-indigo-700 transition"
                   >
-                    {isTestingFb ? '接続テスト中...' : '設定を更新'}
+                    設定を保存して再読込
                   </button>
                   {currentSavedConfig && (
                     <button
                       type="button"
                       onClick={handleClearFirebaseConfig}
-                      className="py-2 px-3 bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+                      className="py-2 px-3 bg-slate-200 text-slate-700 font-bold rounded-xl text-xs hover:bg-slate-300 transition"
                     >
                       リセット
                     </button>
@@ -1942,15 +2248,16 @@ export const ParentDashboard: React.FC = () => {
                   </label>
                   <input
                     type="number"
-                    min={0}
+                    min={1}
+                    max={100000}
                     required
                     value={customRewardInput}
                     onChange={(e) => setCustomRewardInput(Number(e.target.value))}
                     className="w-full px-3 py-2 border-2 border-indigo-200 rounded-xl text-sm font-bold focus:border-indigo-500 focus:outline-none"
                     placeholder="例: 50"
                   />
-                  {customRewardInput < 0 && (
-                    <p className="text-[10px] text-rose-500 font-bold mt-1">0円以上の金額を入力してください。</p>
+                  {(customRewardInput < 1 || customRewardInput > 100000 || isNaN(customRewardInput)) && (
+                    <p className="text-[10px] text-rose-500 font-bold mt-1">1円〜100,000円の範囲で入力してください。</p>
                   )}
                   <p className="text-[10px] text-slate-400 mt-1">
                     ※ 承認するとこの金額が子どもの残高にプラスされます。
@@ -1994,7 +2301,7 @@ export const ParentDashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleApprove}
-                  disabled={approvingReq?.choreId === 'custom' && (customRewardInput < 0 || isNaN(customRewardInput))}
+                  disabled={approvingReq?.choreId === 'custom' && (customRewardInput < 1 || customRewardInput > 100000 || isNaN(customRewardInput))}
                   className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-md shadow-indigo-200 hover:bg-indigo-700 disabled:opacity-50 transition"
                 >
                   承認完了
@@ -2210,17 +2517,87 @@ export const ParentDashboard: React.FC = () => {
               <button
                 type="button"
                 disabled={isClearingHistory}
-                onClick={async () => {
-                  setIsClearingHistory(true);
-                  await clearAllTransactions();
-                  setIsClearingHistory(false);
-                  setShowClearHistoryConfirm(false);
-                  setClearHistorySuccess(true);
-                  setTimeout(() => setClearHistorySuccess(false), 3000);
-                }}
+                onClick={handleExecuteClearAll}
                 className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition shadow-md shadow-rose-200"
               >
                 {isClearingHistory ? '削除中...' : 'すべて削除'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Firestoreセキュリティルール設定モーダル */}
+      {showRulesModal && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowRulesModal(false);
+          }}
+          className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl space-y-4 relative max-h-[85vh] overflow-y-auto my-auto text-left">
+            <button
+              type="button"
+              onClick={() => setShowRulesModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-sm text-slate-800">Firestoreルール設定手順</h3>
+                <p className="text-[11px] text-slate-400">同期エラーを解決する方法</p>
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-600 space-y-2 leading-relaxed">
+              <p>
+                Firebaseコンソールのセキュリティルールが拒否されているため、端末間の同期が失敗しています。
+              </p>
+              <ol className="list-decimal list-inside space-y-1 bg-slate-50 p-3 rounded-2xl border border-slate-200 text-[11px]">
+                <li><a href="https://console.firebase.google.com/" target="_blank" rel="noreferrer" className="text-indigo-600 underline font-bold">Firebase Console</a> を開く</li>
+                <li>プロジェクトを選択 &rarr; <span className="font-bold">Firestore Database</span> &rarr; <span className="font-bold">ルール (Rules)</span> を開く</li>
+                <li>以下のコードを貼り付けて <span className="font-bold text-indigo-700">「公開 (Publish)」</span> をクリック</li>
+              </ol>
+
+              {/* ルールコードのコピーボックス */}
+              <div className="relative bg-slate-900 text-slate-100 p-3 rounded-xl font-mono text-[10px] overflow-x-auto">
+                <pre>{`rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}`}</pre>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const ruleCode = `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if true;\n    }\n  }\n}`;
+                    navigator.clipboard.writeText(ruleCode);
+                    setCopiedRules(true);
+                    setTimeout(() => setCopiedRules(false), 3000);
+                  }}
+                  className="absolute top-2 right-2 px-2 py-1 bg-white/20 hover:bg-white/30 text-white rounded-lg text-[10px] font-sans flex items-center gap-1 transition"
+                >
+                  {copiedRules ? <CheckCheck className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedRules ? 'コピー済' : 'コピー'}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setShowRulesModal(false)}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow-md shadow-indigo-200"
+              >
+                理解しました（閉じる）
               </button>
             </div>
           </div>

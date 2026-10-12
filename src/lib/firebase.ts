@@ -15,6 +15,24 @@ const LOCAL_FIREBASE_CONFIG_KEY = 'kanabank_firebase_config';
 
 export const getSavedFirebaseConfig = (): FirebaseCustomConfig | null => {
   try {
+    if (typeof window !== 'undefined') {
+      // URLクエリパラメータから設定を自動取得（招待リンク/QRコード経由での合流対応）
+      const searchStr = window.location.search || (window.location.hash.includes('?') ? window.location.hash.split('?')[1] : '');
+      const urlParams = new URLSearchParams(searchStr);
+      const configParam = urlParams.get('firebase_config');
+      if (configParam) {
+        try {
+          const decoded = JSON.parse(decodeURIComponent(atob(configParam)));
+          if (decoded.apiKey && decoded.projectId) {
+            localStorage.setItem(LOCAL_FIREBASE_CONFIG_KEY, JSON.stringify(decoded));
+            return decoded;
+          }
+        } catch (e) {
+          console.warn('URLパラメータからのFirebase設定パースエラー:', e);
+        }
+      }
+    }
+
     const raw = localStorage.getItem(LOCAL_FIREBASE_CONFIG_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);

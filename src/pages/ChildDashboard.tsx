@@ -27,8 +27,14 @@ import {
   Type,
   Edit3,
   Search,
-  X
+  X,
+  Cloud,
+  HardDrive,
+  RefreshCw,
+  ShieldAlert,
+  Settings
 } from 'lucide-react';
+import { saveFirebaseConfig } from '../lib/firebase';
 import confetti from 'canvas-confetti';
 
 const ICON_MAP: Record<string, React.ReactNode> = {
@@ -56,6 +62,7 @@ export const ChildDashboard: React.FC = () => {
     submitCustomChoreRequest,
     reportRoutineDone,
     checkAndApplyOverduePenalties,
+    syncStatus,
     logout,
     updateGoal,
     redeemGoal
@@ -71,6 +78,13 @@ export const ChildDashboard: React.FC = () => {
   const [reportingRoutineId, setReportingRoutineId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'home' | 'apply' | 'calendar'>('home');
   const [historySubTab, setHistorySubTab] = useState<'calendar' | 'search'>('calendar');
+
+  // おうちのひと用クラウド合流モーダル
+  const [showParentSyncModal, setShowParentSyncModal] = useState(false);
+  const [parentMathAnswer, setParentMathAnswer] = useState('');
+  const [parentPassUnlocked, setParentPassUnlocked] = useState(false);
+  const [parentSyncCode, setParentSyncCode] = useState('');
+  const [parentSyncError, setParentSyncError] = useState('');
 
   // アプリ起動・画面表示時に期限切れペナルティを自動判定
   useEffect(() => {
@@ -93,6 +107,7 @@ export const ChildDashboard: React.FC = () => {
       if (e.key === 'Escape') {
         setIsEditingGoal(false);
         setShowRedeemModal(false);
+        setShowParentSyncModal(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -268,6 +283,32 @@ export const ChildDashboard: React.FC = () => {
             ))}
           </div>
 
+          {/* クラウド同期ステータス ＆ おうちのひと用設定ボタン */}
+          <button
+            type="button"
+            onClick={() => {
+              setParentPassUnlocked(false);
+              setParentMathAnswer('');
+              setParentSyncError('');
+              setShowParentSyncModal(true);
+            }}
+            className={`p-1.5 rounded-xl border transition flex items-center justify-center ${
+              syncStatus === 'connected'
+                ? 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'
+                : syncStatus === 'error'
+                ? 'bg-rose-50 text-rose-600 border-rose-300 hover:bg-rose-100 animate-pulse'
+                : syncStatus === 'syncing'
+                ? 'bg-amber-50 text-amber-600 border-amber-200'
+                : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+            }`}
+            title="おうちのひと用（クラウドせってい）"
+          >
+            {syncStatus === 'connected' && <Cloud className="w-3.5 h-3.5" />}
+            {syncStatus === 'syncing' && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+            {syncStatus === 'error' && <ShieldAlert className="w-3.5 h-3.5" />}
+            {syncStatus === 'local' && <Settings className="w-3.5 h-3.5" />}
+          </button>
+
           <button
             onClick={logout}
             className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
@@ -289,7 +330,7 @@ export const ChildDashboard: React.FC = () => {
                 <Coins className="w-32 h-32" />
               </div>
               <p className="text-xs font-bold tracking-wider opacity-90 mb-1">
-                {textMode === 'hiragana' ? 'いまの ざんだか' : 'いまのバーチャル残高'}
+                {textMode === 'hiragana' ? 'いまの おかね' : 'いまのバーチャル残高'}
               </p>
               <div className="flex items-center justify-center gap-2 my-2">
                 <Coins className="w-9 h-9 text-amber-100" />
@@ -335,10 +376,12 @@ export const ChildDashboard: React.FC = () => {
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <Flame className="w-5 h-5 text-amber-500" />
-                  <h3 className="font-extrabold text-slate-800 text-sm">きょうの いつもやること</h3>
+                  <h3 className="font-extrabold text-slate-800 text-sm">
+                    {textMode === 'hiragana' ? 'きょうの いつもやること' : '今日のいつもやること'}
+                  </h3>
                 </div>
                 <span className="text-[10px] font-bold bg-amber-50 text-amber-600 px-2 py-0.5 rounded-full border border-amber-100">
-                  {todayRoutines.length}件
+                  {todayRoutines.length}{textMode === 'hiragana' ? 'こ' : '件'}
                 </span>
               </div>
 
@@ -347,16 +390,24 @@ export const ChildDashboard: React.FC = () => {
                 <div className="mb-3 p-3.5 bg-gradient-to-r from-amber-400 to-amber-500 rounded-2xl text-white shadow-sm flex items-center gap-2.5 animate-bounce-subtle">
                   <span className="text-xl">🌟</span>
                   <div>
-                    <h4 className="font-black text-xs">きょうのいつもやること コンプリート！</h4>
-                    <p className="text-[10px] opacity-95">ぜんぶクリアできたね！たいへんよくできました！</p>
+                    <h4 className="font-black text-xs">
+                      {textMode === 'hiragana' ? 'きょうのいつもやること ぜんぶできた！' : 'きょうのいつもやること コンプリート！'}
+                    </h4>
+                    <p className="text-[10px] opacity-95">
+                      {textMode === 'hiragana' ? 'ぜんぶクリアできたね！たいへんよくできました！' : 'ぜんぶクリアできたね！たいへんよくできました！'}
+                    </p>
                   </div>
                 </div>
               )}
 
               {todayRoutines.length === 0 ? (
                 <div className="text-center py-4 bg-slate-50/70 rounded-2xl border border-slate-100">
-                  <p className="text-xs text-slate-400 font-medium">きょうのいつもやることはないよ！</p>
-                  <p className="text-[10px] text-slate-400 mt-0.5">よくがんばったね！</p>
+                  <p className="text-xs text-slate-400 font-medium">
+                    {textMode === 'hiragana' ? 'きょうのいつもやることは ないよ！' : 'きょうのいつもやることはないよ！'}
+                  </p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    {textMode === 'hiragana' ? 'よくがんばったね！' : 'よくがんばったね！'}
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-2.5">
@@ -387,25 +438,27 @@ export const ChildDashboard: React.FC = () => {
                             {/* ご褒美金額: 0円の時は表示しない（仕様準拠） */}
                             {routine.reward > 0 && (
                               <span className="text-[10px] font-extrabold text-amber-600 bg-amber-100/60 px-1.5 py-0.2 rounded-md">
-                                +{routine.reward}円
+                                +{routine.reward}{textMode === 'hiragana' ? 'えん' : '円'}
                               </span>
                             )}
                             {/* ペナルティ金額表示 */}
                             {routine.penaltyAmount > 0 && (
                               <span className="text-[10px] font-bold text-rose-500 bg-rose-50 px-1.5 py-0.2 rounded-md flex items-center gap-0.5">
                                 <AlertTriangle className="w-2.5 h-2.5 inline" />
-                                未達成-{routine.penaltyAmount}円
+                                {textMode === 'hiragana' ? `できなかったら-${routine.penaltyAmount}えん` : `未達成-${routine.penaltyAmount}円`}
                               </span>
                             )}
                           </div>
                           {routine.graceDays > 0 && !isDone && (
                             <p className="text-[10px] text-slate-400 mt-0.5">
-                              猶予: あと{routine.graceDays}日（最終日23:59まで）
+                              {textMode === 'hiragana'
+                                ? `あと${routine.graceDays}にち までに やろう（よる 11:59まで）`
+                                : `猶予: あと${routine.graceDays}日（最終日23:59まで）`}
                             </p>
                           )}
                           {routine.graceDays === 0 && !isDone && (
                             <p className="text-[10px] text-rose-400 mt-0.5">
-                              期限: きょう23:59まで
+                              {textMode === 'hiragana' ? 'きげん: きょうの よる 11:59まで' : '期限: きょう23:59まで'}
                             </p>
                           )}
                         </div>
@@ -414,19 +467,19 @@ export const ChildDashboard: React.FC = () => {
                         <div className="shrink-0">
                           {isApproved && (
                             <span className="inline-flex items-center gap-1 text-[11px] font-extrabold text-emerald-700 bg-emerald-100 px-3 py-1.5 rounded-xl shadow-2xs">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> 完了！
+                              <CheckCircle2 className="w-3.5 h-3.5" /> {textMode === 'hiragana' ? 'かんりょう！' : '完了！'}
                             </span>
                           )}
 
                           {isPending && (
                             <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 bg-amber-200/70 px-2.5 py-1.5 rounded-xl">
-                              <Clock className="w-3.5 h-3.5 animate-pulse" /> かくにん中
+                              <Clock className="w-3.5 h-3.5 animate-pulse" /> {textMode === 'hiragana' ? 'かくにんちゅう' : 'かくにん中'}
                             </span>
                           )}
 
                           {isPenalty && (
                             <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 bg-rose-100 px-2.5 py-1.5 rounded-xl">
-                              <XCircle className="w-3.5 h-3.5" /> 期限切れ
+                              <XCircle className="w-3.5 h-3.5" /> {textMode === 'hiragana' ? 'じかんぎれ' : '期限切れ'}
                             </span>
                           )}
 
@@ -437,7 +490,7 @@ export const ChildDashboard: React.FC = () => {
                               className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 active:scale-95 text-white font-extrabold text-xs shadow-md shadow-amber-200 transition flex items-center gap-1"
                             >
                               <Check className="w-3.5 h-3.5" />
-                              {reportingRoutineId === routine.id ? '送信中...' : 'おわったよ！'}
+                              {reportingRoutineId === routine.id ? (textMode === 'hiragana' ? 'そうしんちゅう...' : '送信中...') : 'おわったよ！'}
                             </button>
                           )}
                         </div>
@@ -489,9 +542,15 @@ export const ChildDashboard: React.FC = () => {
                   <Clock className="w-6 h-6 text-amber-600 shrink-0 animate-pulse" />
                   <div className="text-xs">
                     <p className="font-bold text-amber-900">
-                      お父さん・お母さんの確認まち: {pendingRequests.length}件
+                      {textMode === 'hiragana'
+                        ? `おうちのひとの かくにんまち: ${pendingRequests.length}こ`
+                        : `お父さん・お母さんの確認まち: ${pendingRequests.length}件`}
                     </p>
-                    <p className="text-amber-700">承認されたら残高にプラスされるよ！</p>
+                    <p className="text-amber-700">
+                      {textMode === 'hiragana'
+                        ? 'しょうにん されたら おかねが ふえるよ！'
+                        : '承認されたら残高にプラスされるよ！'}
+                    </p>
                   </div>
                 </div>
                 <button
@@ -500,7 +559,7 @@ export const ChildDashboard: React.FC = () => {
                   className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-extrabold text-xs rounded-xl shadow-xs shrink-0 flex items-center gap-1"
                 >
                   <Send className="w-3.5 h-3.5" />
-                  別のお手伝いを申請
+                  {textMode === 'hiragana' ? 'べつの おてつだいを する' : '別のお手伝いを申請'}
                 </button>
               </div>
             )}
@@ -509,10 +568,12 @@ export const ChildDashboard: React.FC = () => {
             <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
               <h3 className="font-bold text-slate-700 text-xs mb-3 flex items-center gap-1.5">
                 <Sparkles className="w-4 h-4 text-amber-500" />
-                最近の申請履歴
+                {textMode === 'hiragana' ? 'さいきんの おてつだい' : '最近の申請履歴'}
               </h3>
               {requests.length === 0 ? (
-                <p className="text-xs text-slate-400 py-3 text-center">まだ申請がありません</p>
+                <p className="text-xs text-slate-400 py-3 text-center">
+                  {textMode === 'hiragana' ? 'まだ おてつだいの しんせいは ないよ' : 'まだ申請がありません'}
+                </p>
               ) : (
                 <div className="space-y-2">
                   {requests.slice(0, 4).map((req) => (
@@ -523,12 +584,14 @@ export const ChildDashboard: React.FC = () => {
                       <div>
                         <div className="flex items-center gap-1.5">
                           <span className="font-bold text-slate-700">{req.title}</span>
-                          <span className="text-[10px] text-amber-600 font-semibold">+{req.reward}円</span>
+                          <span className="text-[10px] text-amber-600 font-semibold">
+                            +{req.reward}{textMode === 'hiragana' ? 'えん' : '円'}
+                          </span>
                         </div>
                         {req.comment && <p className="text-[11px] text-slate-400 mt-0.5">「{req.comment}」</p>}
                         {req.parentComment && (
                           <p className="text-[11px] text-indigo-600 mt-0.5 font-medium">
-                            おや: 「{req.parentComment}」
+                            {textMode === 'hiragana' ? 'おうちのひと' : 'おや'}: 「{req.parentComment}」
                           </p>
                         )}
                       </div>
@@ -536,17 +599,17 @@ export const ChildDashboard: React.FC = () => {
                       <div>
                         {req.status === 'pending' && (
                           <span className="inline-flex items-center gap-1 text-[11px] text-amber-600 font-bold bg-amber-100 px-2 py-0.5 rounded-full">
-                            <Clock className="w-3 h-3" /> 確認中
+                            <Clock className="w-3 h-3" /> {textMode === 'hiragana' ? 'かくにんちゅう' : '確認中'}
                           </span>
                         )}
                         {req.status === 'approved' && (
                           <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 font-bold bg-emerald-100 px-2 py-0.5 rounded-full">
-                            <CheckCircle2 className="w-3 h-3" /> 承認！
+                            <CheckCircle2 className="w-3 h-3" /> {textMode === 'hiragana' ? 'しょうにん！' : '承認！'}
                           </span>
                         )}
                         {req.status === 'rejected' && (
                           <span className="inline-flex items-center gap-1 text-[11px] text-rose-600 font-bold bg-rose-100 px-2 py-0.5 rounded-full">
-                            <XCircle className="w-3 h-3" /> やり直し
+                            <XCircle className="w-3 h-3" /> {textMode === 'hiragana' ? 'やりなおし' : 'やり直し'}
                           </span>
                         )}
                       </div>
@@ -930,6 +993,135 @@ export const ChildDashboard: React.FC = () => {
           </button>
         </div>
       </nav>
+
+      {/* おうちのひと用クラウド合流モーダル */}
+      {showParentSyncModal && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowParentSyncModal(false);
+          }}
+          className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto"
+        >
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 relative max-h-[85vh] overflow-y-auto my-auto text-left">
+            <button
+              type="button"
+              onClick={() => setShowParentSyncModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              aria-label="閉じる"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                <Settings className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-sm text-slate-800">おうちのひと用設定</h3>
+                <p className="text-[11px] text-slate-400">クラウド同期・ファミリー合流</p>
+              </div>
+            </div>
+
+            {/* 同期ステータス案内 */}
+            <div className={`p-3 rounded-2xl border text-xs space-y-1 ${
+              syncStatus === 'connected'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : syncStatus === 'error'
+                ? 'bg-rose-50 border-rose-200 text-rose-900'
+                : 'bg-slate-50 border-slate-200 text-slate-700'
+            }`}>
+              <p className="font-bold flex items-center gap-1.5">
+                {syncStatus === 'connected' && <Cloud className="w-4 h-4 text-emerald-600" />}
+                {syncStatus === 'error' && <ShieldAlert className="w-4 h-4 text-rose-600" />}
+                {syncStatus === 'local' && <HardDrive className="w-4 h-4 text-slate-600" />}
+                ステータス: {
+                  syncStatus === 'connected' ? 'クラウド同期中' :
+                  syncStatus === 'error' ? '同期エラー（設定確認）' :
+                  syncStatus === 'syncing' ? '確認中...' : 'ローカル保存'
+                }
+              </p>
+              <p className="text-[10px] leading-tight">
+                {syncStatus === 'connected'
+                  ? '親の端末とリアルタイムに繋がっています。'
+                  : '複数端末で残高を合わせるには親画面から発行した設定コードを入力してください。'}
+              </p>
+            </div>
+
+            {!parentPassUnlocked ? (
+              /* 保護者ロック（九九計算） */
+              <div className="space-y-3 pt-1">
+                <p className="text-xs text-slate-600 leading-snug">
+                  誤操作を防ぐため、大人の確認クイズに答えてください：<br />
+                  <span className="font-extrabold text-indigo-600 text-sm">7 × 8 = ？</span>
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    value={parentMathAnswer}
+                    onChange={(e) => setParentMathAnswer(e.target.value)}
+                    placeholder="答えを入力"
+                    className="flex-1 px-3 py-2 border rounded-xl text-xs font-bold"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (parentMathAnswer.trim() === '56') {
+                        setParentPassUnlocked(true);
+                        setParentSyncError('');
+                      } else {
+                        setParentSyncError('答えがちがいます');
+                      }
+                    }}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition"
+                  >
+                    解除
+                  </button>
+                </div>
+                {parentSyncError && (
+                  <p className="text-[11px] text-rose-500 font-bold">{parentSyncError}</p>
+                )}
+              </div>
+            ) : (
+              /* 設定コード入力フォーム */
+              <div className="space-y-3 pt-1">
+                <p className="text-xs text-slate-600 leading-snug">
+                  親の管理画面の「設定」&rarr;「ファミリー招待」からコピーした「設定コード」を貼り付けてください：
+                </p>
+                <input
+                  type="text"
+                  value={parentSyncCode}
+                  onChange={(e) => setParentSyncCode(e.target.value)}
+                  placeholder="設定コードを貼り付け..."
+                  className="w-full px-3 py-2 border rounded-xl text-xs font-mono"
+                />
+                {parentSyncError && (
+                  <p className="text-[11px] text-rose-500 font-bold">{parentSyncError}</p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      const decoded = JSON.parse(decodeURIComponent(atob(parentSyncCode.trim())));
+                      if (decoded.apiKey && decoded.projectId) {
+                        saveFirebaseConfig(decoded);
+                        alert('設定を保存しました。再読み込みしてクラウドに合流します！');
+                        window.location.reload();
+                      } else {
+                        setParentSyncError('設定コードに必要な項目がありません');
+                      }
+                    } catch {
+                      setParentSyncError('無効な設定コードです');
+                    }
+                  }}
+                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md transition"
+                >
+                  設定を適用して再読込
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
