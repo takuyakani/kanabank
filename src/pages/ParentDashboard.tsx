@@ -1301,12 +1301,15 @@ export const ParentDashboard: React.FC = () => {
                   onChange={(e) => setEditingRoutineData({ ...editingRoutineData, graceDays: Number(e.target.value) })}
                   className="w-full px-3 py-2 border rounded-xl"
                 >
-                  <option value={0}>0日（当日中に承認されないとペナルティ）</option>
-                  <option value={1}>1日（翌日まで猶予あり・推奨）</option>
-                  <option value={2}>2日（2日後まで猶予あり）</option>
-                  <option value={3}>3日（3日後まで猶予あり）</option>
-                  <option value={7}>7日（1週間猶予）</option>
+                  <option value={0}>0日（当日23:59まで・推奨しません）</option>
+                  <option value={1}>1日（翌日23:59まで猶予・推奨）</option>
+                  <option value={2}>2日（2日後の23:59まで猶予）</option>
+                  <option value={3}>3日（3日後の23:59まで猶予）</option>
+                  <option value={7}>7日（1週間後の23:59まで猶予）</option>
                 </select>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  ※ 猶予期間の最終日 23:59（翌日0:00）を過ぎると、自動的に未達成ペナルティとして残高から減額されます。
+                </p>
               </div>
 
               <div className="flex gap-2 pt-2">

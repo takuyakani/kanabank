@@ -87,6 +87,12 @@ export const ChildDashboard: React.FC = () => {
   const todayStr = `${y}-${m}-${d}`;
 
   const todayRoutines = routines.filter((r) => isTaskScheduledForDate(r, todayObj));
+  const allRoutinesCompleted =
+    todayRoutines.length > 0 &&
+    todayRoutines.every((routine) => {
+      const log = routineLogs.find((l) => l.id === `${routine.id}_${todayStr}`);
+      return log?.status === 'completed';
+    });
 
   const handleRoutineDone = async (routineId: string) => {
     setReportingRoutineId(routineId);
@@ -242,6 +248,17 @@ export const ChildDashboard: React.FC = () => {
                 </span>
               </div>
 
+              {/* 全問達成お祝いコンプリートバナー */}
+              {allRoutinesCompleted && (
+                <div className="mb-3 p-3.5 bg-gradient-to-r from-amber-400 to-amber-500 rounded-2xl text-white shadow-sm flex items-center gap-2.5 animate-bounce-subtle">
+                  <span className="text-xl">🌟</span>
+                  <div>
+                    <h4 className="font-black text-xs">きょうのいつもやること コンプリート！</h4>
+                    <p className="text-[10px] opacity-95">ぜんぶクリアできたね！たいへんよくできました！</p>
+                  </div>
+                </div>
+              )}
+
               {todayRoutines.length === 0 ? (
                 <div className="text-center py-4 bg-slate-50/70 rounded-2xl border border-slate-100">
                   <p className="text-xs text-slate-400 font-medium">きょうのいつもやることはないよ！</p>
@@ -289,7 +306,12 @@ export const ChildDashboard: React.FC = () => {
                           </div>
                           {routine.graceDays > 0 && !isDone && (
                             <p className="text-[10px] text-slate-400 mt-0.5">
-                              猶予: あと{routine.graceDays}日
+                              猶予: あと{routine.graceDays}日（最終日23:59まで）
+                            </p>
+                          )}
+                          {routine.graceDays === 0 && !isDone && (
+                            <p className="text-[10px] text-rose-400 mt-0.5">
+                              期限: きょう23:59まで
                             </p>
                           )}
                         </div>
