@@ -55,6 +55,7 @@ interface AppContextType {
   login: (email: string, pass: string, targetRole: Role) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   updateGoal: (title: string, amount: number) => Promise<{ success: boolean; error?: string }>;
+  updateBalance: (newBalance: number, reason?: string) => Promise<{ success: boolean; error?: string }>;
   submitChoreRequest: (choreId: string, comment?: string) => Promise<void>;
   submitCustomChoreRequest: (title: string, comment?: string) => Promise<void>;
   approveRequest: (requestId: string, bonus?: number, parentComment?: string, customReward?: number) => Promise<void>;
@@ -461,7 +462,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastAndSaveLocalData(undefined, undefined, nextRequests);
 
     if (isFirebaseConfigured && db) {
-      await setDoc(doc(db, 'requests', newReq.id), newReq);
+      try {
+        await setDoc(doc(db, 'requests', newReq.id), newReq);
+      } catch (err) {
+        console.warn('Firebaseへの申請保存エラー（ローカルには保存済み）:', err);
+      }
     }
   };
 
@@ -485,7 +490,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     broadcastAndSaveLocalData(undefined, undefined, nextRequests);
 
     if (isFirebaseConfigured && db) {
-      await setDoc(doc(db, 'requests', newReq.id), newReq);
+      try {
+        await setDoc(doc(db, 'requests', newReq.id), newReq);
+      } catch (err) {
+        console.warn('Firebaseへの自由入力申請保存エラー（ローカルには保存済み）:', err);
+      }
     }
   };
 
@@ -690,8 +699,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setHousehold(nextHousehold);
     broadcastAndSaveLocalData(nextHousehold);
     if (isFirebaseConfigured && db) {
-      await setDoc(doc(db, 'household', 'default'), nextHousehold, { merge: true });
+      try {
+        await setDoc(doc(db, 'household', 'default'), nextHousehold, { merge: true });
+      } catch (e) {
+        console.warn('Firebase sync error for redeemGoal:', e);
+      }
     }
+    return { success: true };
+  };
+
+  // 保護者による残高の直接・任意編集
+  const updateBalance = async (newBalance: number, reason: string = '保護者による残高調整') => {
+    const cleanBalance = Math.max(0, Math.floor(newBalance));
+    const prevBalance = household.balance;
+    const diff = cleanBalance - prevBalance;
+    const nowIso = new Date().toISOString();
+    const todayDate = nowIso.split('T')[0];
+
+    const currentActor = currentUser?.email || '保護者';
+
+    const nextHousehold = {
+      ...household,
+      balance: cleanBalance,
+      updatedAt: nowIso,
+    };
+    setHousehold(nextHousehold);
+
+    let nextTxs = transactions;
+    if (diff !== 0) {
+      const newTx: Transaction = {
+        id: `tx-${Date.now()}`,
+        type: diff > 0 ? 'chore' : 'penalty',
+        title: `残高直接調整 (${diff > 0 ? `+${diff}` : `${diff}`}円)`,
+        amount: diff,
+        date: todayDate,
+        createdAt: nowIso,
+        createdBy: currentActor,
+        note: reason.trim() || `保護者による残高変更 (${prevBalance}円 → ${cleanBalance}円)`,
+      };
+      nextTxs = [newTx, ...transactions];
+      setTransactions(nextTxs);
+
+      if (isFirebaseConfigured && db) {
+        try {
+          await setDoc(doc(db, 'transactions', newTx.id), newTx);
+        } catch (e) {
+          console.warn('Firebase transaction sync error for updateBalance:', e);
+        }
+      }
+    }
+
+    broadcastAndSaveLocalData(nextHousehold, undefined, undefined, nextTxs);
+
+    if (isFirebaseConfigured && db) {
+      try {
+        await updateDoc(doc(db, 'household', 'default'), { balance: cleanBalance, updatedAt: nowIso });
+      } catch (e) {
+        console.warn('Firebase household update error for updateBalance:', e);
+      }
+    }
+
     return { success: true };
   };
 
@@ -914,6 +981,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         login,
         logout,
         updateGoal,
+        updateBalance,
         submitChoreRequest,
         submitCustomChoreRequest,
         approveRequest,

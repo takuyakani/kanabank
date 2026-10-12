@@ -116,10 +116,15 @@ export const ChildDashboard: React.FC = () => {
   const handleApply = async () => {
     if (!selectedChoreId) return;
     setSubmitting(true);
-    await submitChoreRequest(selectedChoreId, comment);
-    setSubmitting(false);
-    setSelectedChoreId(null);
-    setComment('');
+    try {
+      await submitChoreRequest(selectedChoreId, comment);
+    } catch (err) {
+      console.error('お手伝い申請エラー:', err);
+    } finally {
+      setSubmitting(false);
+      setSelectedChoreId(null);
+      setComment('');
+    }
 
     // 申請時のお祝い紙吹雪
     confetti({
@@ -133,11 +138,16 @@ export const ChildDashboard: React.FC = () => {
   const handleCustomApply = async () => {
     if (!customChoreTitle.trim()) return;
     setSubmitting(true);
-    await submitCustomChoreRequest(customChoreTitle.trim(), customChoreComment.trim());
-    setSubmitting(false);
-    setCustomChoreTitle('');
-    setCustomChoreComment('');
-    setIsCustomMode(false);
+    try {
+      await submitCustomChoreRequest(customChoreTitle.trim(), customChoreComment.trim());
+    } catch (err) {
+      console.error('自由入力申請エラー:', err);
+    } finally {
+      setSubmitting(false);
+      setCustomChoreTitle('');
+      setCustomChoreComment('');
+      setIsCustomMode(false);
+    }
 
     confetti({
       particleCount: 60,
@@ -415,14 +425,24 @@ export const ChildDashboard: React.FC = () => {
 
             {/* 親の承認まちバナー */}
             {pendingRequests.length > 0 && (
-              <div className="bg-amber-100/70 border border-amber-200 rounded-2xl p-4 flex items-center gap-3">
-                <Clock className="w-6 h-6 text-amber-600 shrink-0 animate-pulse" />
-                <div className="text-xs">
-                  <p className="font-bold text-amber-900">
-                    お父さん・お母さんの確認まち: {pendingRequests.length}件
-                  </p>
-                  <p className="text-amber-700">承認されたら残高にプラスされるよ！</p>
+              <div className="bg-amber-100/70 border border-amber-200 rounded-2xl p-4 flex items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-3">
+                  <Clock className="w-6 h-6 text-amber-600 shrink-0 animate-pulse" />
+                  <div className="text-xs">
+                    <p className="font-bold text-amber-900">
+                      お父さん・お母さんの確認まち: {pendingRequests.length}件
+                    </p>
+                    <p className="text-amber-700">承認されたら残高にプラスされるよ！</p>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('apply')}
+                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-extrabold text-xs rounded-xl shadow-xs shrink-0 flex items-center gap-1"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  別のお手伝いを申請
+                </button>
               </div>
             )}
 
