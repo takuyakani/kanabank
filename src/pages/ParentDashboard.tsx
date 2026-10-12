@@ -1,0 +1,895 @@
+import React, { useState } from 'react';
+import { useApp } from '../context/AppContext';
+import { CalendarView } from '../components/CalendarView';
+import {
+  saveFirebaseConfig,
+  clearFirebaseConfig,
+  getSavedFirebaseConfig,
+  type FirebaseCustomConfig
+} from '../lib/firebase';
+import type { ChoreMaster } from '../types';
+import {
+  Check,
+  X,
+  Plus,
+  Trash2,
+  Edit2,
+  MinusCircle,
+  LogOut,
+  ShoppingBag,
+  Clock,
+  Settings,
+  Calendar,
+  AlertTriangle,
+  Info,
+  Cloud,
+  HardDrive,
+  Gift
+} from 'lucide-react';
+import confetti from 'canvas-confetti';
+
+export const ParentDashboard: React.FC = () => {
+  const {
+    currentUser,
+    household,
+    chores,
+    requests,
+    transactions,
+    isDemoMode,
+    approveRequest,
+    rejectRequest,
+    addPenalty,
+    addSpend,
+    addChoreMaster,
+    updateChoreMaster,
+    deleteChoreMaster,
+    redeemGoal,
+    logout,
+  } = useApp();
+
+  const [activeTab, setActiveTab] = useState<'approvals' | 'penalty' | 'spend' | 'chores' | 'calendar' | 'settings'>('approvals');
+
+  // 減額（ペナルティ）フォーム
+  const [penaltyReason, setPenaltyReason] = useState('');
+  const [penaltyAmount, setPenaltyAmount] = useState<number>(50);
+  const [penaltySuccess, setPenaltySuccess] = useState(false);
+  const [penaltyError, setPenaltyError] = useState('');
+
+  // お小遣い使用フォーム
+  const [spendTitle, setSpendTitle] = useState('');
+  const [spendAmount, setSpendAmount] = useState<number>(100);
+  const [spendSuccess, setSpendSuccess] = useState(false);
+  const [spendError, setSpendError] = useState('');
+
+  // お手伝いマスター編集モーダル
+  const [isEditingChore, setIsEditingChore] = useState(false);
+  const [editingChoreData, setEditingChoreData] = useState<Partial<ChoreMaster>>({
+    title: '',
+    reward: 30,
+    icon: 'sparkles',
+    description: '',
+  });
+
+  // お手伝いマスター削除確認モーダル
+  const [deletingChore, setDeletingChore] = useState<ChoreMaster | null>(null);
+
+  // 申請承認モーダル（ボーナス・コメント用）
+  const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [bonusInput, setBonusInput] = useState(0);
+  const [parentCommentInput, setParentCommentInput] = useState('');
+
+  // 目標達成引き換え
+  const [goalRedeemSuccess, setGoalRedeemSuccess] = useState(false);
+  const [goalRedeemError, setGoalRedeemError] = useState('');
+
+  // クラウド（Firebase）手動オーバーライド設定
+  const currentSavedConfig = getSavedFirebaseConfig();
+  const [fbApiKey, setFbApiKey] = useState(currentSavedConfig?.apiKey || '');
+  const [fbProjectId, setFbProjectId] = useState(currentSavedConfig?.projectId || '');
+  const [fbConfigMessage, setFbConfigMessage] = useState('');
+
+  const isGoalReached = household.balance >= household.goalAmount && household.goalAmount > 0;
+  const pendingRequests = requests.filter((r) => r.status === 'pending');
+
+  const handleApprove = async () => {
+    if (!approvingId) return;
+    await approveRequest(approvingId, Number(bonusInput), parentCommentInput);
+    confetti({
+      particleCount: 50,
+      spread: 60,
+      origin: { y: 0.6 },
+    });
+    setApprovingId(null);
+    setBonusInput(0);
+    setParentCommentInput('');
+  };
+
+  const handleReject = async (id: string) => {
+    const reason = window.prompt('やり直し・却下の理由（省略可）', '');
+    if (reason !== null) {
+      await rejectRequest(id, reason);
+    }
+  };
+
+  const handlePenaltySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPenaltyError('');
+
+    if (!penaltyAmount || penaltyAmount < 1) {
+      setPenaltyError('減額する金額は1円以上を入力してください。');
+      return;
+    }
+    if (!penaltyReason.trim()) {
+      setPenaltyError('理由を入力してください。');
+      return;
+    }
+
+    const res = await addPenalty(penaltyReason, penaltyAmount);
+    if (!res.success) {
+      setPenaltyError(res.error || '減額の登録に失敗しました。');
+      return;
+    }
+    setPenaltyReason('');
+    setPenaltySuccess(true);
+    setTimeout(() => setPenaltySuccess(false), 3000);
+  };
+
+  const handleSpendSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSpendError('');
+
+    if (!spendAmount || spendAmount < 1) {
+      setSpendError('出金する金額は1円以上を入力してください。');
+      return;
+    }
+    if (spendAmount > household.balance) {
+      setSpendError(`残高が不足しています（現在の残高: ${household.balance}円）。`);
+      return;
+    }
+
+    const res = await addSpend(spendTitle, spendAmount);
+    if (!res.success) {
+      setSpendError(res.error || '出金の登録に失敗しました。');
+      return;
+    }
+    setSpendTitle('');
+    setSpendSuccess(true);
+    setTimeout(() => setSpendSuccess(false), 3000);
+  };
+
+  const handleRedeemGoalByParent = async () => {
+    setGoalRedeemError('');
+    const res = await redeemGoal();
+    if (!res.success) {
+      setGoalRedeemError(res.error || '引き換えに失敗しました。');
+      return;
+    }
+    setGoalRedeemSuccess(true);
+    confetti({
+      particleCount: 120,
+      spread: 80,
+      origin: { y: 0.5 },
+    });
+    setTimeout(() => setGoalRedeemSuccess(false), 4000);
+  };
+
+  const handleSaveChore = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingChoreData.title || !editingChoreData.reward) return;
+
+    if (editingChoreData.id) {
+      await updateChoreMaster(editingChoreData as ChoreMaster);
+    } else {
+      await addChoreMaster({
+        title: editingChoreData.title,
+        reward: Number(editingChoreData.reward),
+        icon: editingChoreData.icon || 'sparkles',
+        description: editingChoreData.description,
+      });
+    }
+    setIsEditingChore(false);
+  };
+
+  const confirmDeleteChore = async () => {
+    if (!deletingChore) return;
+    await deleteChoreMaster(deletingChore.id);
+    setDeletingChore(null);
+  };
+
+  const handleSaveFirebaseConfig = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!fbApiKey || !fbProjectId) {
+      setFbConfigMessage('API Key と Project ID は必須です。');
+      return;
+    }
+
+    const config: FirebaseCustomConfig = {
+      apiKey: fbApiKey.trim(),
+      projectId: fbProjectId.trim(),
+      authDomain: `${fbProjectId.trim()}.firebaseapp.com`,
+    };
+    saveFirebaseConfig(config);
+    setFbConfigMessage('Firebase設定を保存しました。設定を有効にするためページを再読み込みします...');
+    setTimeout(() => {
+      window.location.reload();
+    }, 1200);
+  };
+
+  const handleClearFirebaseConfig = () => {
+    clearFirebaseConfig();
+    setFbConfigMessage('設定を削除しました。ローカルモードに戻すためページを再読み込みします...');
+    setTimeout(() => {
+      window.location.reload();
+    }, 1200);
+  };
+
+  const isPenaltyValid = Boolean(penaltyReason.trim() && penaltyAmount >= 1);
+  const isSpendValid = Boolean(spendTitle.trim() && spendAmount >= 1 && spendAmount <= household.balance);
+
+  return (
+    <div className="max-w-md mx-auto min-h-screen bg-slate-50 pb-28 flex flex-col">
+      {/* トップバー */}
+      <header className="px-5 py-3.5 bg-indigo-900 text-white flex items-center justify-between sticky top-0 z-20 shadow-md">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-full bg-indigo-700 flex items-center justify-center font-bold text-sm">
+            親
+          </div>
+          <div>
+            <h1 className="text-sm font-extrabold leading-tight">保護者ダッシュボード</h1>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className="text-[10px] text-indigo-200">残高: {household.balance} 円</span>
+              <span className="text-[9px] px-1.5 py-0.2 rounded-full font-bold flex items-center gap-0.5 bg-indigo-800 text-indigo-200">
+                {!isDemoMode ? (
+                  <>
+                    <Cloud className="w-2.5 h-2.5 text-emerald-400" /> クラウド同期中
+                  </>
+                ) : (
+                  <>
+                    <HardDrive className="w-2.5 h-2.5 text-amber-300" /> ローカル保存
+                  </>
+                )}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setActiveTab('settings')}
+            className={`p-2 rounded-xl transition ${
+              activeTab === 'settings' ? 'bg-indigo-700 text-white' : 'text-indigo-300 hover:text-white'
+            }`}
+            title="クラウド設定"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+          <button
+            onClick={logout}
+            className="p-2 rounded-xl text-indigo-300 hover:text-white hover:bg-indigo-800 transition"
+            title="ログアウト"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
+      </header>
+
+      {/* メインコンテンツ */}
+      <main className="p-4 space-y-4 flex-1">
+        {/* 目標達成中カード（親画面でも目立つ位置に表示） */}
+        {isGoalReached && activeTab !== 'settings' && (
+          <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-3xl p-4 shadow-lg flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-white/20 flex items-center justify-center shrink-0">
+                <Gift className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h4 className="font-extrabold text-xs sm:text-sm leading-tight">子どもが目標を達成しました！</h4>
+                <p className="text-[11px] opacity-90">
+                  「{household.goalTitle}」（{household.goalAmount}円）
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleRedeemGoalByParent}
+              className="px-3 py-2 rounded-xl bg-white text-emerald-700 font-black text-xs shadow-md hover:bg-emerald-50 transition shrink-0 ml-2"
+            >
+              買ってあげた！
+            </button>
+          </div>
+        )}
+
+        {goalRedeemSuccess && (
+          <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl font-bold flex items-center gap-2">
+            <Gift className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>目標達成のご褒美（{household.goalAmount}円）を出金処理し、次の目標へリセットしました！</span>
+          </div>
+        )}
+
+        {goalRedeemError && (
+          <div className="p-3 bg-rose-50 border border-rose-200 text-rose-600 text-xs rounded-xl flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{goalRedeemError}</span>
+          </div>
+        )}
+
+        {/* --- タブ1: 承認まち一覧 --- */}
+        {activeTab === 'approvals' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
+              <h3 className="font-bold text-slate-800 text-sm mb-3">子どもからの申請一覧</h3>
+
+              {pendingRequests.length === 0 ? (
+                <p className="text-xs text-slate-400 py-8 text-center">現在、確認まちのお手伝いはありません</p>
+              ) : (
+                <div className="space-y-3">
+                  {pendingRequests.map((req) => (
+                    <div
+                      key={req.id}
+                      className="p-4 rounded-2xl bg-indigo-50/50 border border-indigo-100 flex flex-col gap-3"
+                    >
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h4 className="font-bold text-slate-800 text-sm">{req.title}</h4>
+                          <p className="text-indigo-600 font-extrabold text-xs">+{req.reward} 円</p>
+                          {req.comment && (
+                            <p className="text-xs text-slate-500 mt-1 bg-white px-2.5 py-1 rounded-lg border border-slate-100">
+                              こども: 「{req.comment}」
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 pt-1 border-t border-indigo-100/60">
+                        <button
+                          onClick={() => handleReject(req.id)}
+                          className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition flex items-center justify-center gap-1"
+                        >
+                          <X className="w-3.5 h-3.5" /> やり直し
+                        </button>
+                        <button
+                          onClick={() => {
+                            setApprovingId(req.id);
+                            setBonusInput(0);
+                            setParentCommentInput('');
+                          }}
+                          className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition flex items-center justify-center gap-1 shadow-sm"
+                        >
+                          <Check className="w-3.5 h-3.5" /> 承認する
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* --- タブ2: 叱られたペナルティ（減額） --- */}
+        {activeTab === 'penalty' && (
+          <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 text-rose-600">
+                <MinusCircle className="w-5 h-5" />
+                叱られた内容と減額の登録
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                約束を守らなかったり叱られた際に、理由と金額を入力して残高から差し引きます。
+              </p>
+            </div>
+
+            {penaltyError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-600 text-xs rounded-xl flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{penaltyError}</span>
+              </div>
+            )}
+
+            {penaltySuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl font-bold">
+                ✓ 減額（ペナルティ）を登録しました。
+              </div>
+            )}
+
+            <form onSubmit={handlePenaltySubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">理由・内容</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="例: ゲームの時間を30分オーバーした"
+                  value={penaltyReason}
+                  onChange={(e) => setPenaltyReason(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-rose-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">減額する金額 (円)</label>
+                <div className="flex gap-2">
+                  {[20, 50, 100].map((amt) => (
+                    <button
+                      type="button"
+                      key={amt}
+                      onClick={() => setPenaltyAmount(amt)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
+                        penaltyAmount === amt
+                          ? 'border-rose-500 bg-rose-50 text-rose-600'
+                          : 'border-slate-200 bg-slate-50 text-slate-600'
+                      }`}
+                    >
+                      -{amt}円
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  value={penaltyAmount}
+                  onChange={(e) => setPenaltyAmount(Number(e.target.value))}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-rose-400 mt-2"
+                />
+                {penaltyAmount < 1 && (
+                  <p className="text-[11px] text-rose-600 font-semibold mt-1">1円以上の金額を入力してください。</p>
+                )}
+              </div>
+
+              {household.balance - penaltyAmount < 0 && (
+                <div className="p-2.5 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl flex items-center gap-2">
+                  <Info className="w-4 h-4 shrink-0 text-amber-600" />
+                  <span>注意: 減額後の残高は0円になります（現在の残高: {household.balance}円）。</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={!isPenaltyValid}
+                className="w-full py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs shadow-md shadow-rose-200 transition"
+              >
+                減額を反映する
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* --- タブ3: お小遣い使用（出金） --- */}
+        {activeTab === 'spend' && (
+          <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 text-indigo-600">
+                <ShoppingBag className="w-5 h-5" />
+                お小遣いを使った記録（出金）
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                実際にお金を使って買い物した際、バーチャル残高から差し引きます。
+              </p>
+            </div>
+
+            {spendError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-600 text-xs rounded-xl flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{spendError}</span>
+              </div>
+            )}
+
+            {spendSuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl font-bold">
+                ✓ お小遣いの使用を記録しました。
+              </div>
+            )}
+
+            <form onSubmit={handleSpendSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">買ったもの・使い道</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="例: 駄菓子屋さんでお菓子を買った"
+                  value={spendTitle}
+                  onChange={(e) => setSpendTitle(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-indigo-400"
+                />
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-bold text-slate-700">使用した金額 (円)</label>
+                  <span className="text-[11px] text-slate-400">現在の残高: {household.balance}円</span>
+                </div>
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  max={household.balance}
+                  value={spendAmount}
+                  onChange={(e) => setSpendAmount(Number(e.target.value))}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-indigo-400"
+                />
+                {spendAmount > household.balance && (
+                  <p className="text-[11px] text-rose-600 font-semibold mt-1">残高を超えています。</p>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={!isSpendValid}
+                className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs shadow-md shadow-indigo-200 transition"
+              >
+                出金を反映する
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* --- タブ4: お手伝いマスター設定 --- */}
+        {activeTab === 'chores' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-slate-800 text-sm">お手伝いマスター登録</h3>
+                <button
+                  onClick={() => {
+                    setEditingChoreData({ title: '', reward: 30, icon: 'sparkles', description: '' });
+                    setIsEditingChore(true);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 text-xs font-bold hover:bg-indigo-100 flex items-center gap-1"
+                >
+                  <Plus className="w-4 h-4" /> 新規追加
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {chores.map((chore) => (
+                  <div
+                    key={chore.id}
+                    className="p-3 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between"
+                  >
+                    <div>
+                      <h4 className="font-bold text-xs text-slate-800">{chore.title}</h4>
+                      <p className="text-[11px] text-indigo-600 font-extrabold">+{chore.reward} 円</p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => {
+                          setEditingChoreData(chore);
+                          setIsEditingChore(true);
+                        }}
+                        className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200"
+                        title="編集"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => setDeletingChore(chore)}
+                        className="p-1.5 text-slate-400 hover:text-rose-500 rounded-lg hover:bg-rose-50"
+                        title="削除"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* --- タブ5: カレンダー --- */}
+        {activeTab === 'calendar' && (
+          <div className="space-y-4">
+            <CalendarView transactions={transactions} />
+          </div>
+        )}
+
+        {/* --- タブ6: クラウド同期ステータス --- */}
+        {activeTab === 'settings' && (
+          <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 text-indigo-700">
+                <Cloud className="w-5 h-5" />
+                クラウド同期（ファミリー連動）ステータス
+              </h3>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                お父さん・お母さん・お子さんの複数端末間でリアルタイムにお小遣いデータを共有する設定状況です。
+              </p>
+            </div>
+
+            <div className={`p-4 rounded-2xl border text-xs space-y-2 ${
+              !isDemoMode ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'
+            }`}>
+              <div className="flex items-center gap-2 font-bold text-sm">
+                {!isDemoMode ? (
+                  <>
+                    <Cloud className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <span>☁️ クラウド同期：有効</span>
+                  </>
+                ) : (
+                  <>
+                    <HardDrive className="w-5 h-5 text-amber-600 shrink-0" />
+                    <span>⚠️ ローカル保存モードで動作中</span>
+                  </>
+                )}
+              </div>
+              <p className="leading-relaxed">
+                {!isDemoMode
+                  ? 'Firebaseクラウドに接続されています。親2名・子1名のすべての端末間で残高・お手伝い・履歴がリアルタイムに共有されます。'
+                  : '環境変数（GitHub Secretsまたは.env）が設定されると、自動的にクラウド同期モードに切り替わります。'}
+              </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-2 text-xs">
+              <h4 className="font-bold text-slate-700">ログイン中のアカウント</h4>
+              <p className="text-slate-600 font-mono text-[11px] bg-white p-2 rounded-xl border border-slate-200">
+                {currentUser?.email || '親アカウント'}（保護者権限）
+              </p>
+              <p className="text-[10px] text-slate-400">
+                ※お手伝いの承認や減額を行うと、操作した親のアカウントが履歴に自動記録されます。
+              </p>
+            </div>
+
+            {/* 詳細設定アコーディオン（任意の手動オーバーライドが必要な場合用） */}
+            <details className="text-xs border-t border-slate-100 pt-3 text-slate-500">
+              <summary className="font-semibold cursor-pointer hover:text-indigo-600 py-1">
+                ⚙️ 手動設定・デバッグ用オーバーライド
+              </summary>
+              <form onSubmit={handleSaveFirebaseConfig} className="space-y-3 pt-3">
+                {fbConfigMessage && (
+                  <div className="p-2 bg-amber-50 text-amber-800 text-[11px] rounded-lg">
+                    {fbConfigMessage}
+                  </div>
+                )}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">API Key</label>
+                  <input
+                    type="text"
+                    required
+                    value={fbApiKey}
+                    onChange={(e) => setFbApiKey(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg border text-[11px] font-mono"
+                    placeholder="AIzaSy..."
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">Project ID</label>
+                  <input
+                    type="text"
+                    required
+                    value={fbProjectId}
+                    onChange={(e) => setFbProjectId(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg border text-[11px] font-mono"
+                    placeholder="your-project"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    className="flex-1 py-2 bg-indigo-600 text-white font-bold rounded-xl text-xs hover:bg-indigo-700"
+                  >
+                    設定を更新
+                  </button>
+                  {currentSavedConfig && (
+                    <button
+                      type="button"
+                      onClick={handleClearFirebaseConfig}
+                      className="py-2 px-3 bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+                    >
+                      リセット
+                    </button>
+                  )}
+                </div>
+              </form>
+            </details>
+          </div>
+        )}
+      </main>
+
+      {/* 固定ボトムナビゲーションバー（モバイル最適化・画面外見切れゼロ） */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-200 py-2 px-3 z-30 shadow-lg">
+        <div className="max-w-md mx-auto grid grid-cols-5 gap-1 text-center">
+          <button
+            onClick={() => setActiveTab('approvals')}
+            className={`flex flex-col items-center justify-center py-1 rounded-xl transition relative ${
+              activeTab === 'approvals' ? 'text-indigo-600 font-black' : 'text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            <Clock className="w-5 h-5 mb-0.5" />
+            <span className="text-[10px] leading-tight">承認</span>
+            {pendingRequests.length > 0 && (
+              <span className="absolute top-0 right-3 bg-rose-500 text-white text-[9px] px-1 py-0.2 rounded-full font-black animate-pulse">
+                {pendingRequests.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('penalty')}
+            className={`flex flex-col items-center justify-center py-1 rounded-xl transition ${
+              activeTab === 'penalty' ? 'text-rose-600 font-black' : 'text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            <MinusCircle className="w-5 h-5 mb-0.5" />
+            <span className="text-[10px] leading-tight">減額</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('spend')}
+            className={`flex flex-col items-center justify-center py-1 rounded-xl transition ${
+              activeTab === 'spend' ? 'text-indigo-600 font-black' : 'text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            <ShoppingBag className="w-5 h-5 mb-0.5" />
+            <span className="text-[10px] leading-tight">出金</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('chores')}
+            className={`flex flex-col items-center justify-center py-1 rounded-xl transition ${
+              activeTab === 'chores' ? 'text-indigo-600 font-black' : 'text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            <Settings className="w-5 h-5 mb-0.5" />
+            <span className="text-[10px] leading-tight">お手伝い</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('calendar')}
+            className={`flex flex-col items-center justify-center py-1 rounded-xl transition ${
+              activeTab === 'calendar' ? 'text-indigo-600 font-black' : 'text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            <Calendar className="w-5 h-5 mb-0.5" />
+            <span className="text-[10px] leading-tight">履歴</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* 削除確認モーダル */}
+      {deletingChore && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-base text-slate-800">お手伝いの削除</h3>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              「<span className="font-bold text-slate-700">{deletingChore.title}</span>」を削除してもよろしいですか？
+            </p>
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingChore(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteChore}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 shadow-md shadow-rose-200"
+              >
+                削除する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 承認用モーダル */}
+      {approvingId && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4">
+            <h3 className="font-bold text-base text-slate-800">お手伝いの承認</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">
+                  ボーナス加算（任意、円）
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={bonusInput}
+                  onChange={(e) => setBonusInput(Number(e.target.value))}
+                  className="w-full px-3 py-2 border rounded-xl text-sm"
+                  placeholder="0"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">
+                  ほめ言葉・メッセージ（任意）
+                </label>
+                <input
+                  type="text"
+                  value={parentCommentInput}
+                  onChange={(e) => setParentCommentInput(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-xl text-sm"
+                  placeholder="きれいにできたね！"
+                />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setApprovingId(null)}
+                  className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  onClick={handleApprove}
+                  className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-md shadow-indigo-200"
+                >
+                  承認完了
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* マスター編集モーダル */}
+      {isEditingChore && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4">
+            <h3 className="font-bold text-base text-slate-800">
+              {editingChoreData.id ? 'お手伝いの編集' : '新しいお手伝いを追加'}
+            </h3>
+            <form onSubmit={handleSaveChore} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">お手伝いのなまえ</label>
+                <input
+                  type="text"
+                  required
+                  value={editingChoreData.title}
+                  onChange={(e) => setEditingChoreData({ ...editingChoreData, title: e.target.value })}
+                  className="w-full px-3 py-2 border rounded-xl text-sm"
+                  placeholder="例: 玄関のくつ並べ"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">もらえる金額（円）</label>
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  value={editingChoreData.reward}
+                  onChange={(e) => setEditingChoreData({ ...editingChoreData, reward: Number(e.target.value) })}
+                  className="w-full px-3 py-2 border rounded-xl text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">アイコンタイプ</label>
+                <select
+                  value={editingChoreData.icon}
+                  onChange={(e) => setEditingChoreData({ ...editingChoreData, icon: e.target.value })}
+                  className="w-full px-3 py-2 border rounded-xl text-sm"
+                >
+                  <option value="sparkles">キラキラ（汎用）</option>
+                  <option value="bath">お風呂</option>
+                  <option value="dish">食器・お皿</option>
+                  <option value="trash">ゴミ</option>
+                  <option value="shirt">洗濯・服</option>
+                  <option value="book">勉強・本</option>
+                </select>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingChore(false)}
+                  className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-md shadow-indigo-200"
+                >
+                  保存する
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

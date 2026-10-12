@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+:root {
+  font-family: 'Hiragino Maru Gothic ProN', 'Rounded Mplus 1c', sans-serif, system-ui;
+  background-color: #f7fafc;
+  color: #2d3748;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
