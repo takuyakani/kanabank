@@ -7,7 +7,8 @@ import {
   getSavedFirebaseConfig,
   type FirebaseCustomConfig
 } from '../lib/firebase';
-import type { ChoreMaster } from '../types';
+import type { ChoreMaster, RoutineTask, ScheduleType } from '../types';
+import { formatScheduleDescription } from '../utils/scheduleUtils';
 import {
   Check,
   X,
@@ -24,7 +25,9 @@ import {
   Info,
   Cloud,
   HardDrive,
-  Gift
+  Gift,
+  Trophy,
+  CheckSquare
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -35,7 +38,12 @@ export const ParentDashboard: React.FC = () => {
     chores,
     requests,
     transactions,
+    routines,
+    routineLogs,
+    fontSize,
+    setFontSize,
     isDemoMode,
+    updateGoal,
     approveRequest,
     rejectRequest,
     addPenalty,
@@ -44,10 +52,21 @@ export const ParentDashboard: React.FC = () => {
     updateChoreMaster,
     deleteChoreMaster,
     redeemGoal,
+    addRoutine,
+    updateRoutine,
+    deleteRoutine,
+    approveRoutineLog,
     logout,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'approvals' | 'penalty' | 'spend' | 'chores' | 'calendar' | 'settings'>('approvals');
+  const [activeTab, setActiveTab] = useState<'approvals' | 'routines' | 'penalty' | 'spend' | 'chores' | 'calendar' | 'settings'>('approvals');
+
+  // 親からの目標編集モーダル
+  const [isEditingGoal, setIsEditingGoal] = useState(false);
+  const [goalTitleInput, setGoalTitleInput] = useState(household.goalTitle);
+  const [goalAmountInput, setGoalAmountInput] = useState<number>(household.goalAmount);
+  const [goalError, setGoalError] = useState('');
+  const [goalSuccess, setGoalSuccess] = useState(false);
 
   // 減額（ペナルティ）フォーム
   const [penaltyReason, setPenaltyReason] = useState('');
@@ -73,6 +92,22 @@ export const ParentDashboard: React.FC = () => {
   // お手伝いマスター削除確認モーダル
   const [deletingChore, setDeletingChore] = useState<ChoreMaster | null>(null);
 
+  // ルーティン編集モーダル
+  const [isEditingRoutine, setIsEditingRoutine] = useState(false);
+  const [editingRoutineData, setEditingRoutineData] = useState<Partial<RoutineTask>>({
+    title: '',
+    reward: 0,
+    penaltyAmount: 30,
+    graceDays: 1,
+    scheduleType: 'daily',
+    active: true,
+  });
+  const [routineDaysOfWeek, setRoutineDaysOfWeek] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [routineDayOfMonth, setRoutineDayOfMonth] = useState<number>(1);
+  const [routineNthWeek, setRoutineNthWeek] = useState<number>(1);
+  const [routineNthWeekday, setRoutineNthWeekday] = useState<number>(1);
+  const [deletingRoutine, setDeletingRoutine] = useState<RoutineTask | null>(null);
+
   // 申請承認モーダル（ボーナス・コメント用）
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [bonusInput, setBonusInput] = useState(0);
@@ -82,7 +117,7 @@ export const ParentDashboard: React.FC = () => {
   const [goalRedeemSuccess, setGoalRedeemSuccess] = useState(false);
   const [goalRedeemError, setGoalRedeemError] = useState('');
 
-  // クラウド（Firebase）手動オーバーライド設定
+  // クラウド手動設定
   const currentSavedConfig = getSavedFirebaseConfig();
   const [fbApiKey, setFbApiKey] = useState(currentSavedConfig?.apiKey || '');
   const [fbProjectId, setFbProjectId] = useState(currentSavedConfig?.projectId || '');
@@ -90,6 +125,7 @@ export const ParentDashboard: React.FC = () => {
 
   const isGoalReached = household.balance >= household.goalAmount && household.goalAmount > 0;
   const pendingRequests = requests.filter((r) => r.status === 'pending');
+  const pendingRoutineLogs = routineLogs.filter((l) => l.status === 'pending');
 
   const handleApprove = async () => {
     if (!approvingId) return;
@@ -109,6 +145,19 @@ export const ParentDashboard: React.FC = () => {
     if (reason !== null) {
       await rejectRequest(id, reason);
     }
+  };
+
+  const handleSaveGoal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGoalError('');
+    const res = await updateGoal(goalTitleInput, Number(goalAmountInput));
+    if (!res.success) {
+      setGoalError(res.error || '目標の更新に失敗しました。');
+      return;
+    }
+    setIsEditingGoal(false);
+    setGoalSuccess(true);
+    setTimeout(() => setGoalSuccess(false), 3000);
   };
 
   const handlePenaltySubmit = async (e: React.FormEvent) => {
@@ -190,10 +239,56 @@ export const ParentDashboard: React.FC = () => {
     setIsEditingChore(false);
   };
 
+  const handleSaveRoutine = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingRoutineData.title?.trim()) return;
+
+    const schedType = (editingRoutineData.scheduleType || 'daily') as ScheduleType;
+    let configObj: RoutineTask['scheduleConfig'] = undefined;
+
+    if (schedType === 'weekly_days') {
+      configObj = { daysOfWeek: routineDaysOfWeek };
+    } else if (schedType === 'monthly_date') {
+      configObj = { dayOfMonth: routineDayOfMonth };
+    } else if (schedType === 'monthly_nth_weekday') {
+      configObj = { nthWeek: routineNthWeek, nthWeekday: routineNthWeekday };
+    }
+
+    if (editingRoutineData.id) {
+      await updateRoutine({
+        ...(editingRoutineData as RoutineTask),
+        title: editingRoutineData.title.trim(),
+        reward: Number(editingRoutineData.reward || 0),
+        penaltyAmount: Number(editingRoutineData.penaltyAmount || 0),
+        graceDays: Number(editingRoutineData.graceDays || 0),
+        scheduleType: schedType,
+        scheduleConfig: configObj,
+        active: editingRoutineData.active ?? true,
+      });
+    } else {
+      await addRoutine({
+        title: editingRoutineData.title.trim(),
+        reward: Number(editingRoutineData.reward || 0),
+        penaltyAmount: Number(editingRoutineData.penaltyAmount || 0),
+        graceDays: Number(editingRoutineData.graceDays || 0),
+        scheduleType: schedType,
+        scheduleConfig: configObj,
+        active: true,
+      });
+    }
+    setIsEditingRoutine(false);
+  };
+
   const confirmDeleteChore = async () => {
     if (!deletingChore) return;
     await deleteChoreMaster(deletingChore.id);
     setDeletingChore(null);
+  };
+
+  const confirmDeleteRoutine = async () => {
+    if (!deletingRoutine) return;
+    await deleteRoutine(deletingRoutine.id);
+    setDeletingRoutine(null);
   };
 
   const handleSaveFirebaseConfig = (e: React.FormEvent) => {
@@ -229,7 +324,7 @@ export const ParentDashboard: React.FC = () => {
   return (
     <div className="max-w-md mx-auto min-h-screen bg-slate-50 pb-28 flex flex-col">
       {/* トップバー */}
-      <header className="px-5 py-3.5 bg-indigo-900 text-white flex items-center justify-between sticky top-0 z-20 shadow-md">
+      <header className="px-4 py-3 bg-indigo-900 text-white flex items-center justify-between sticky top-0 z-20 shadow-md">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-full bg-indigo-700 flex items-center justify-center font-bold text-sm">
             親
@@ -252,10 +347,43 @@ export const ParentDashboard: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* 文字サイズ切替 & 設定 & ログアウト */}
         <div className="flex items-center gap-1">
+          {/* 文字サイズ切替 */}
+          <div className="flex bg-indigo-800/80 rounded-xl p-0.5 border border-indigo-700">
+            <button
+              onClick={() => setFontSize('small')}
+              className={`px-1.5 py-0.5 rounded-lg text-[10px] font-bold transition ${
+                fontSize === 'small' ? 'bg-white text-indigo-900 shadow-xs' : 'text-indigo-200'
+              }`}
+              title="文字サイズ: 小"
+            >
+              小
+            </button>
+            <button
+              onClick={() => setFontSize('medium')}
+              className={`px-1.5 py-0.5 rounded-lg text-[10px] font-bold transition ${
+                fontSize === 'medium' ? 'bg-white text-indigo-900 shadow-xs' : 'text-indigo-200'
+              }`}
+              title="文字サイズ: 中"
+            >
+              中
+            </button>
+            <button
+              onClick={() => setFontSize('large')}
+              className={`px-1.5 py-0.5 rounded-lg text-[10px] font-bold transition ${
+                fontSize === 'large' ? 'bg-white text-indigo-900 shadow-xs' : 'text-indigo-200'
+              }`}
+              title="文字サイズ: 大"
+            >
+              大
+            </button>
+          </div>
+
           <button
             onClick={() => setActiveTab('settings')}
-            className={`p-2 rounded-xl transition ${
+            className={`p-1.5 rounded-xl transition ${
               activeTab === 'settings' ? 'bg-indigo-700 text-white' : 'text-indigo-300 hover:text-white'
             }`}
             title="クラウド設定"
@@ -264,7 +392,7 @@ export const ParentDashboard: React.FC = () => {
           </button>
           <button
             onClick={logout}
-            className="p-2 rounded-xl text-indigo-300 hover:text-white hover:bg-indigo-800 transition"
+            className="p-1.5 rounded-xl text-indigo-300 hover:text-white hover:bg-indigo-800 transition"
             title="ログアウト"
           >
             <LogOut className="w-4 h-4" />
@@ -274,6 +402,42 @@ export const ParentDashboard: React.FC = () => {
 
       {/* メインコンテンツ */}
       <main className="p-4 space-y-4 flex-1">
+        {/* 親からの目標表示＆編集カード */}
+        <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+              <Trophy className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-[10px] font-bold text-slate-400">現在の子どもの目標</p>
+              <h3 className="font-extrabold text-sm text-slate-800 leading-tight">
+                {household.goalTitle}
+              </h3>
+              <p className="text-xs font-black text-amber-600 mt-0.5">
+                目標金額: {household.goalAmount} 円
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              setGoalTitleInput(household.goalTitle);
+              setGoalAmountInput(household.goalAmount);
+              setGoalError('');
+              setIsEditingGoal(true);
+            }}
+            className="px-3 py-1.5 rounded-xl bg-amber-50 text-amber-700 hover:bg-amber-100 font-bold text-xs transition shrink-0"
+          >
+            目標を編集
+          </button>
+        </div>
+
+        {goalSuccess && (
+          <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl font-bold flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>子どもの目標（{household.goalTitle} / {household.goalAmount}円）を更新しました！</span>
+          </div>
+        )}
+
         {/* 目標達成中カード（親画面でも目立つ位置に表示） */}
         {isGoalReached && activeTab !== 'settings' && (
           <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-3xl p-4 shadow-lg flex items-center justify-between">
@@ -314,8 +478,50 @@ export const ParentDashboard: React.FC = () => {
         {/* --- タブ1: 承認まち一覧 --- */}
         {activeTab === 'approvals' && (
           <div className="space-y-4">
+            {/* ルーティン（いつもやること）の未承認一覧 */}
+            {pendingRoutineLogs.length > 0 && (
+              <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
+                <h3 className="font-bold text-slate-800 text-sm mb-3 flex items-center gap-1.5 text-indigo-700">
+                  <CheckSquare className="w-4 h-4" />
+                  「いつもやること」の完了報告 ({pendingRoutineLogs.length}件)
+                </h3>
+                <div className="space-y-3">
+                  {pendingRoutineLogs.map((log) => (
+                    <div
+                      key={log.id}
+                      className="p-3.5 rounded-2xl bg-indigo-50/60 border border-indigo-100 flex items-center justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-bold text-slate-800 text-xs">{log.title}</span>
+                          <span className="text-[10px] text-slate-400 font-medium">({log.targetDate}分)</span>
+                        </div>
+                        <div className="text-[11px] mt-1 space-x-2">
+                          {log.reward > 0 ? (
+                            <span className="text-emerald-700 font-bold">ご褒美: +{log.reward}円</span>
+                          ) : (
+                            <span className="text-slate-500 font-semibold">ご褒美なし</span>
+                          )}
+                          {log.penaltyAmount > 0 && (
+                            <span className="text-rose-600 font-bold">未達成ペナルティ: -{log.penaltyAmount}円</span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => approveRoutineLog(log.id)}
+                        className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition shrink-0 ml-2 flex items-center gap-1"
+                      >
+                        <Check className="w-3.5 h-3.5" /> 承認
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* お手伝い申請の未承認一覧 */}
             <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
-              <h3 className="font-bold text-slate-800 text-sm mb-3">子どもからの申請一覧</h3>
+              <h3 className="font-bold text-slate-800 text-sm mb-3">子どもからのお手伝い申請</h3>
 
               {pendingRequests.length === 0 ? (
                 <p className="text-xs text-slate-400 py-8 text-center">現在、確認まちのお手伝いはありません</p>
@@ -364,7 +570,91 @@ export const ParentDashboard: React.FC = () => {
           </div>
         )}
 
-        {/* --- タブ2: 叱られたペナルティ（減額） --- */}
+        {/* --- タブ2: いつもやること（ルーティンマスター設定） --- */}
+        {activeTab === 'routines' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm">いつもおこなうこと（スケジュール）</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    毎日や月〜金、月1回などの習慣を設定し、期限超過でペナルティを課します。
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setEditingRoutineData({
+                      title: '',
+                      reward: 0,
+                      penaltyAmount: 30,
+                      graceDays: 1,
+                      scheduleType: 'daily',
+                      active: true,
+                    });
+                    setRoutineDaysOfWeek([1, 2, 3, 4, 5]);
+                    setRoutineDayOfMonth(1);
+                    setRoutineNthWeek(1);
+                    setRoutineNthWeekday(1);
+                    setIsEditingRoutine(true);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 text-xs font-bold hover:bg-indigo-100 flex items-center gap-1 shrink-0"
+                >
+                  <Plus className="w-4 h-4" /> 新規作成
+                </button>
+              </div>
+
+              <div className="space-y-2.5">
+                {routines.map((routine) => (
+                  <div
+                    key={routine.id}
+                    className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-bold text-xs text-slate-800">{routine.title}</h4>
+                        <span className="text-[10px] bg-slate-200/70 text-slate-600 px-2 py-0.5 rounded-md font-semibold">
+                          {formatScheduleDescription(routine)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-[11px] mt-1.5">
+                        {routine.reward > 0 ? (
+                          <span className="text-emerald-700 font-extrabold">+{routine.reward} 円</span>
+                        ) : null}
+                        <span className="text-rose-600 font-extrabold">未達成: -{routine.penaltyAmount} 円</span>
+                        <span className="text-slate-400">猶予: {routine.graceDays}日</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => {
+                          setEditingRoutineData(routine);
+                          if (routine.scheduleConfig?.daysOfWeek) setRoutineDaysOfWeek(routine.scheduleConfig.daysOfWeek);
+                          if (routine.scheduleConfig?.dayOfMonth) setRoutineDayOfMonth(routine.scheduleConfig.dayOfMonth);
+                          if (routine.scheduleConfig?.nthWeek) setRoutineNthWeek(routine.scheduleConfig.nthWeek);
+                          if (routine.scheduleConfig?.nthWeekday !== undefined) setRoutineNthWeekday(routine.scheduleConfig.nthWeekday);
+                          setIsEditingRoutine(true);
+                        }}
+                        className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200"
+                        title="編集"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => setDeletingRoutine(routine)}
+                        className="p-1.5 text-slate-400 hover:text-rose-500 rounded-lg hover:bg-rose-50"
+                        title="削除"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* --- タブ3: 叱られたペナルティ（減額） --- */}
         {activeTab === 'penalty' && (
           <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
             <div>
@@ -452,7 +742,7 @@ export const ParentDashboard: React.FC = () => {
           </div>
         )}
 
-        {/* --- タブ3: お小遣い使用（出金） --- */}
+        {/* --- タブ4: お小遣い使用（出金） --- */}
         {activeTab === 'spend' && (
           <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
             <div>
@@ -521,7 +811,7 @@ export const ParentDashboard: React.FC = () => {
           </div>
         )}
 
-        {/* --- タブ4: お手伝いマスター設定 --- */}
+        {/* --- タブ5: お手伝いマスター設定 --- */}
         {activeTab === 'chores' && (
           <div className="space-y-4">
             <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
@@ -574,14 +864,14 @@ export const ParentDashboard: React.FC = () => {
           </div>
         )}
 
-        {/* --- タブ5: カレンダー --- */}
+        {/* --- タブ6: カレンダー --- */}
         {activeTab === 'calendar' && (
           <div className="space-y-4">
             <CalendarView transactions={transactions} />
           </div>
         )}
 
-        {/* --- タブ6: クラウド同期ステータス --- */}
+        {/* --- タブ7: クラウド同期ステータス --- */}
         {activeTab === 'settings' && (
           <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
             <div>
@@ -627,7 +917,7 @@ export const ParentDashboard: React.FC = () => {
               </p>
             </div>
 
-            {/* 詳細設定アコーディオン（任意の手動オーバーライドが必要な場合用） */}
+            {/* 詳細設定アコーディオン */}
             <details className="text-xs border-t border-slate-100 pt-3 text-slate-500">
               <summary className="font-semibold cursor-pointer hover:text-indigo-600 py-1">
                 ⚙️ 手動設定・デバッグ用オーバーライド
@@ -683,9 +973,9 @@ export const ParentDashboard: React.FC = () => {
         )}
       </main>
 
-      {/* 固定ボトムナビゲーションバー（モバイル最適化・画面外見切れゼロ） */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-200 py-2 px-3 z-30 shadow-lg">
-        <div className="max-w-md mx-auto grid grid-cols-5 gap-1 text-center">
+      {/* 固定ボトムナビゲーションバー（6カラムでバランス配置） */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-200 py-2 px-2 z-30 shadow-lg">
+        <div className="max-w-md mx-auto grid grid-cols-6 gap-0.5 text-center">
           <button
             onClick={() => setActiveTab('approvals')}
             className={`flex flex-col items-center justify-center py-1 rounded-xl transition relative ${
@@ -694,11 +984,21 @@ export const ParentDashboard: React.FC = () => {
           >
             <Clock className="w-5 h-5 mb-0.5" />
             <span className="text-[10px] leading-tight">承認</span>
-            {pendingRequests.length > 0 && (
-              <span className="absolute top-0 right-3 bg-rose-500 text-white text-[9px] px-1 py-0.2 rounded-full font-black animate-pulse">
-                {pendingRequests.length}
+            {(pendingRequests.length > 0 || pendingRoutineLogs.length > 0) && (
+              <span className="absolute top-0 right-1 bg-rose-500 text-white text-[9px] px-1 py-0.2 rounded-full font-black animate-pulse">
+                {pendingRequests.length + pendingRoutineLogs.length}
               </span>
             )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('routines')}
+            className={`flex flex-col items-center justify-center py-1 rounded-xl transition ${
+              activeTab === 'routines' ? 'text-indigo-600 font-black' : 'text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            <CheckSquare className="w-5 h-5 mb-0.5" />
+            <span className="text-[10px] leading-tight">いつも</span>
           </button>
 
           <button
@@ -743,7 +1043,276 @@ export const ParentDashboard: React.FC = () => {
         </div>
       </nav>
 
-      {/* 削除確認モーダル */}
+      {/* 目標編集モーダル（親用） */}
+      {isEditingGoal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4">
+            <h3 className="font-bold text-base text-slate-800">子どもの目標を設定する</h3>
+            {goalError && (
+              <div className="p-2.5 bg-rose-50 text-rose-600 text-xs rounded-xl flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{goalError}</span>
+              </div>
+            )}
+            <form onSubmit={handleSaveGoal} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">目標の品名・こと</label>
+                <input
+                  type="text"
+                  required
+                  value={goalTitleInput}
+                  onChange={(e) => setGoalTitleInput(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-xl text-sm"
+                  placeholder="例: ニンテンドースイッチソフト"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">目標金額（円）</label>
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  value={goalAmountInput}
+                  onChange={(e) => setGoalAmountInput(Number(e.target.value))}
+                  className="w-full px-3 py-2 border rounded-xl text-sm"
+                />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingGoal(false)}
+                  className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-md shadow-indigo-200"
+                >
+                  保存する
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ルーティン編集モーダル */}
+      {isEditingRoutine && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4 my-8">
+            <h3 className="font-bold text-base text-slate-800">
+              {editingRoutineData.id ? '「いつもやること」の編集' : '新しい「いつもやること」を作成'}
+            </h3>
+            <form onSubmit={handleSaveRoutine} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">タスク名</label>
+                <input
+                  type="text"
+                  required
+                  value={editingRoutineData.title || ''}
+                  onChange={(e) => setEditingRoutineData({ ...editingRoutineData, title: e.target.value })}
+                  className="w-full px-3 py-2 border rounded-xl"
+                  placeholder="例: 明日の学校の時間割チェック"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">スケジュール頻度</label>
+                <select
+                  value={editingRoutineData.scheduleType || 'daily'}
+                  onChange={(e) => setEditingRoutineData({ ...editingRoutineData, scheduleType: e.target.value as ScheduleType })}
+                  className="w-full px-3 py-2 border rounded-xl"
+                >
+                  <option value="daily">まいにち（毎日）</option>
+                  <option value="weekdays">月〜金（平日のみ）</option>
+                  <option value="weekly_days">曜日を指定する</option>
+                  <option value="monthly_date">毎月決まった日（例: 毎月1日）</option>
+                  <option value="monthly_end">毎月月末（月1回）</option>
+                  <option value="monthly_nth_weekday">毎月第〇〇曜日（例: 第2月曜日）</option>
+                </select>
+              </div>
+
+              {/* 曜日指定オプション */}
+              {editingRoutineData.scheduleType === 'weekly_days' && (
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">実施する曜日</label>
+                  <div className="flex gap-1">
+                    {['日', '月', '火', '水', '木', '金', '土'].map((name, idx) => {
+                      const isSelected = routineDaysOfWeek.includes(idx);
+                      return (
+                        <button
+                          type="button"
+                          key={name}
+                          onClick={() => {
+                            if (isSelected) {
+                              setRoutineDaysOfWeek(routineDaysOfWeek.filter((d) => d !== idx));
+                            } else {
+                              setRoutineDaysOfWeek([...routineDaysOfWeek, idx]);
+                            }
+                          }}
+                          className={`flex-1 py-1.5 rounded-lg font-bold border transition ${
+                            isSelected ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-600'
+                          }`}
+                        >
+                          {name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 毎月特定日オプション */}
+              {editingRoutineData.scheduleType === 'monthly_date' && (
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">毎月の日付（1〜31日）</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={31}
+                    value={routineDayOfMonth}
+                    onChange={(e) => setRoutineDayOfMonth(Number(e.target.value))}
+                    className="w-full px-3 py-2 border rounded-xl"
+                  />
+                </div>
+              )}
+
+              {/* 第〇〇曜日オプション */}
+              {editingRoutineData.scheduleType === 'monthly_nth_weekday' && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">何週目</label>
+                    <select
+                      value={routineNthWeek}
+                      onChange={(e) => setRoutineNthWeek(Number(e.target.value))}
+                      className="w-full px-3 py-2 border rounded-xl"
+                    >
+                      <option value={1}>第1</option>
+                      <option value={2}>第2</option>
+                      <option value={3}>第3</option>
+                      <option value={4}>第4</option>
+                      <option value={5}>第5</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">曜日</label>
+                    <select
+                      value={routineNthWeekday}
+                      onChange={(e) => setRoutineNthWeekday(Number(e.target.value))}
+                      className="w-full px-3 py-2 border rounded-xl"
+                    >
+                      <option value={1}>月曜日</option>
+                      <option value={2}>火曜日</option>
+                      <option value={3}>水曜日</option>
+                      <option value={4}>木曜日</option>
+                      <option value={5}>金曜日</option>
+                      <option value={6}>土曜日</option>
+                      <option value={0}>日曜日</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    ご褒美金額（円）
+                    <span className="text-[10px] text-slate-400 block font-normal">※0円ならご褒美なし</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={editingRoutineData.reward ?? 0}
+                    onChange={(e) => setEditingRoutineData({ ...editingRoutineData, reward: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    未達成ペナルティ（円）
+                    <span className="text-[10px] text-rose-500 block font-normal">超過時に引かれる額</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={editingRoutineData.penaltyAmount ?? 30}
+                    onChange={(e) => setEditingRoutineData({ ...editingRoutineData, penaltyAmount: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border rounded-xl"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  承認の猶予日数
+                </label>
+                <select
+                  value={editingRoutineData.graceDays ?? 1}
+                  onChange={(e) => setEditingRoutineData({ ...editingRoutineData, graceDays: Number(e.target.value) })}
+                  className="w-full px-3 py-2 border rounded-xl"
+                >
+                  <option value={0}>0日（当日中に承認されないとペナルティ）</option>
+                  <option value={1}>1日（翌日まで猶予あり・推奨）</option>
+                  <option value={2}>2日（2日後まで猶予あり）</option>
+                  <option value={3}>3日（3日後まで猶予あり）</option>
+                  <option value={7}>7日（1週間猶予）</option>
+                </select>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingRoutine(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-bold shadow-md shadow-indigo-200"
+                >
+                  保存する
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ルーティン削除確認モーダル */}
+      {deletingRoutine && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-base text-slate-800">スケジュールの削除</h3>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              「<span className="font-bold text-slate-700">{deletingRoutine.title}</span>」を削除してもよろしいですか？
+            </p>
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingRoutine(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteRoutine}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white text-xs font-bold"
+              >
+                削除する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 削除確認モーダル（お手伝い） */}
       {deletingChore && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4 text-center">
@@ -826,7 +1395,7 @@ export const ParentDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* マスター編集モーダル */}
+      {/* マスター編集モーダル（お手伝い） */}
       {isEditingChore && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl space-y-4">

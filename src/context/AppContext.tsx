@@ -1,6 +1,25 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import type { Role, HouseholdData, ChoreMaster, ChoreRequest, Transaction } from '../types';
-import { INITIAL_HOUSEHOLD, INITIAL_CHORES, INITIAL_REQUESTS, INITIAL_TRANSACTIONS } from '../data/initialData';
+import type {
+  Role,
+  HouseholdData,
+  ChoreMaster,
+  ChoreRequest,
+  Transaction,
+  RoutineTask,
+  RoutineLog,
+  FontSizePreference
+} from '../types';
+import {
+  INITIAL_HOUSEHOLD,
+  INITIAL_CHORES,
+  INITIAL_REQUESTS,
+  INITIAL_TRANSACTIONS,
+  INITIAL_ROUTINES,
+  INITIAL_ROUTINE_LOGS
+} from '../data/initialData';
+import {
+  calculateDueDate
+} from '../utils/scheduleUtils';
 import { isFirebaseConfigured, auth, db } from '../lib/firebase';
 import {
   signInWithEmailAndPassword,
@@ -27,6 +46,10 @@ interface AppContextType {
   chores: ChoreMaster[];
   requests: ChoreRequest[];
   transactions: Transaction[];
+  routines: RoutineTask[];
+  routineLogs: RoutineLog[];
+  fontSize: FontSizePreference;
+  setFontSize: (size: FontSizePreference) => void;
   isDemoMode: boolean;
   login: (email: string, pass: string, targetRole: Role) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
@@ -40,6 +63,13 @@ interface AppContextType {
   updateChoreMaster: (chore: ChoreMaster) => Promise<void>;
   deleteChoreMaster: (id: string) => Promise<void>;
   redeemGoal: () => Promise<{ success: boolean; error?: string }>;
+  // ルーティン関連
+  addRoutine: (routine: Omit<RoutineTask, 'id' | 'createdAt'>) => Promise<void>;
+  updateRoutine: (routine: RoutineTask) => Promise<void>;
+  deleteRoutine: (id: string) => Promise<void>;
+  reportRoutineDone: (routineId: string, targetDate: string) => Promise<void>;
+  approveRoutineLog: (logId: string) => Promise<void>;
+  checkAndApplyOverduePenalties: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -59,11 +89,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [chores, setChores] = useState<ChoreMaster[]>(INITIAL_CHORES);
   const [requests, setRequests] = useState<ChoreRequest[]>(INITIAL_REQUESTS);
   const [transactions, setTransactions] = useState<Transaction[]>(INITIAL_TRANSACTIONS);
+  const [routines, setRoutines] = useState<RoutineTask[]>(INITIAL_ROUTINES);
+  const [routineLogs, setRoutineLogs] = useState<RoutineLog[]>(INITIAL_ROUTINE_LOGS);
+
+  // 文字サイズステート
+  const [fontSize, setFontSizeState] = useState<FontSizePreference>('medium');
 
   // BroadcastChannel 参照
   const channelRef = useRef<BroadcastChannel | null>(null);
 
-  // 現在のURLハッシュパスから初期ロールを推定（#/parent なら parent セッション、#/child なら child セッション）
+  // アカウントに応じた文字サイズ保存・適用キー
+  const getFontSizeStorageKey = (userEmail?: string) => {
+    return `kanabank_fontsize_${userEmail || 'guest'}`;
+  };
+
+  // 文字サイズの変更
+  const setFontSize = (size: FontSizePreference) => {
+    setFontSizeState(size);
+    const key = getFontSizeStorageKey(currentUser?.email);
+    localStorage.setItem(key, size);
+
+    // HTMLルートにクラス適用
+    if (typeof document !== 'undefined') {
+      document.documentElement.classList.remove('font-size-small', 'font-size-medium', 'font-size-large');
+      document.documentElement.classList.add(`font-size-${size}`);
+    }
+  };
+
+  // ユーザー切替時の文字サイズ読み込み
+  useEffect(() => {
+    const key = getFontSizeStorageKey(currentUser?.email);
+    const saved = localStorage.getItem(key) as FontSizePreference | null;
+    const initialSize = saved || 'medium';
+    setFontSizeState(initialSize);
+
+    if (typeof document !== 'undefined') {
+      document.documentElement.classList.remove('font-size-small', 'font-size-medium', 'font-size-large');
+      document.documentElement.classList.add(`font-size-${initialSize}`);
+    }
+  }, [currentUser]);
+
+  // 現在のURLハッシュパスから初期ロールを推定
   useEffect(() => {
     const hash = window.location.hash;
     const isParentPath = hash.startsWith('#/parent');
@@ -98,7 +164,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
-  // BroadcastChannel 及び storage イベントリスナーの設定（同一端末の複数タブ間リアルタイム同期）
+  // BroadcastChannel 及び storage イベントリスナーの設定
   useEffect(() => {
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
       const channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
@@ -112,12 +178,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (data.chores) setChores(data.chores);
             if (data.requests) setRequests(data.requests);
             if (data.transactions) setTransactions(data.transactions);
+            if (data.routines) setRoutines(data.routines);
+            if (data.routineLogs) setRoutineLogs(data.routineLogs);
           }
         }
       };
     }
 
-    // fallback for window storage event
     const handleStorageEvent = (e: StorageEvent) => {
       if (e.key === LOCAL_STORAGE_KEY && e.newValue) {
         try {
@@ -126,6 +193,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (parsed.chores) setChores(parsed.chores);
           if (parsed.requests) setRequests(parsed.requests);
           if (parsed.transactions) setTransactions(parsed.transactions);
+          if (parsed.routines) setRoutines(parsed.routines);
+          if (parsed.routineLogs) setRoutineLogs(parsed.routineLogs);
         } catch (err) {
           console.error('Storage sync error', err);
         }
@@ -151,18 +220,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (parsed.chores) setChores(parsed.chores);
           if (parsed.requests) setRequests(parsed.requests);
           if (parsed.transactions) setTransactions(parsed.transactions);
+          if (parsed.routines) setRoutines(parsed.routines);
+          if (parsed.routineLogs) setRoutineLogs(parsed.routineLogs);
         } catch (e) {
           console.error('Failed to parse local storage data', e);
         }
       }
     } else {
-      // Firebaseリスナーセットアップ
       if (!auth || !db) return;
       const firestoreDb: Firestore = db;
 
       const unsubscribeAuth = onAuthStateChanged(auth, (_user: User | null) => {});
 
-      // 世帯情報リスナー
       const unsubscribeHousehold = onSnapshot(doc(firestoreDb, 'household', 'default'), (docSnap) => {
         if (docSnap.exists()) {
           setHousehold(docSnap.data() as HouseholdData);
@@ -171,7 +240,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       });
 
-      // お手伝いマスターリスナー
       const unsubscribeChores = onSnapshot(collection(firestoreDb, 'chores'), (snap) => {
         if (!snap.empty) {
           const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChoreMaster));
@@ -181,18 +249,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       });
 
-      // 申請リスナー
       const qRequests = query(collection(firestoreDb, 'requests'), orderBy('requestedAt', 'desc'));
       const unsubscribeRequests = onSnapshot(qRequests, (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChoreRequest));
         setRequests(list);
       });
 
-      // 履歴リスナー
       const qTransactions = query(collection(firestoreDb, 'transactions'), orderBy('createdAt', 'desc'));
       const unsubscribeTransactions = onSnapshot(qTransactions, (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Transaction));
         setTransactions(list);
+      });
+
+      const unsubscribeRoutines = onSnapshot(collection(firestoreDb, 'routines'), (snap) => {
+        if (!snap.empty) {
+          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RoutineTask));
+          setRoutines(list);
+        } else {
+          INITIAL_ROUTINES.forEach((r) => setDoc(doc(firestoreDb, 'routines', r.id), r));
+        }
+      });
+
+      const unsubscribeRoutineLogs = onSnapshot(collection(firestoreDb, 'routineLogs'), (snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RoutineLog));
+        setRoutineLogs(list);
       });
 
       return () => {
@@ -201,6 +281,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         unsubscribeChores();
         unsubscribeRequests();
         unsubscribeTransactions();
+        unsubscribeRoutines();
+        unsubscribeRoutineLogs();
       };
     }
   }, []);
@@ -210,20 +292,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     h: HouseholdData = household,
     c: ChoreMaster[] = chores,
     r: ChoreRequest[] = requests,
-    t: Transaction[] = transactions
+    t: Transaction[] = transactions,
+    rou: RoutineTask[] = routines,
+    rLogs: RoutineLog[] = routineLogs
   ) => {
-    const payload = { household: h, chores: c, requests: r, transactions: t };
+    const payload = {
+      household: h,
+      chores: c,
+      requests: r,
+      transactions: t,
+      routines: rou,
+      routineLogs: rLogs,
+    };
     if (!isFirebaseConfigured) {
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(payload));
     }
-    // 他タブへ即時ブロードキャスト
     channelRef.current?.postMessage({
       type: 'SYNC_DATA',
       payload,
     });
   };
 
-  // ログイン処理（親と子のセッションを独立管理）
+  // 期限切れペナルティ自動チェック（起動時やデータ更新時に判定）
+  const checkAndApplyOverduePenalties = async () => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    let updatedLogs = [...routineLogs];
+    let currentBalance = household.balance;
+    let nextTxs = [...transactions];
+    let hadPenalty = false;
+
+    // 過去7日間のログを点検
+    for (const rLog of updatedLogs) {
+      // 未完了・未ペナルティかつ、期日を過ぎている場合
+      if (
+        (rLog.status === 'open' || rLog.status === 'pending') &&
+        rLog.dueDate < todayStr &&
+        rLog.penaltyAmount > 0
+      ) {
+        hadPenalty = true;
+        const nowIso = new Date().toISOString();
+        rLog.status = 'penalized';
+        rLog.penalizedAt = nowIso;
+
+        const deduction = rLog.penaltyAmount;
+        currentBalance = Math.max(0, currentBalance - deduction);
+
+        const newTx: Transaction = {
+          id: `tx-pen-${Date.now()}-${rLog.id}`,
+          type: 'penalty',
+          title: `未達成ペナルティ: ${rLog.title} (${rLog.targetDate}分)`,
+          amount: -deduction,
+          date: todayStr,
+          createdAt: nowIso,
+          createdBy: 'システム自動判定',
+          note: `期日(${rLog.dueDate})までに承認されませんでした`,
+        };
+        nextTxs = [newTx, ...nextTxs];
+
+        if (isFirebaseConfigured && db) {
+          await updateDoc(doc(db, 'routineLogs', rLog.id), {
+            status: 'penalized',
+            penalizedAt: nowIso,
+          });
+          await setDoc(doc(db, 'transactions', newTx.id), newTx);
+        }
+      }
+    }
+
+    if (hadPenalty) {
+      const nextHousehold = { ...household, balance: currentBalance, updatedAt: new Date().toISOString() };
+      setHousehold(nextHousehold);
+      setTransactions(nextTxs);
+      setRoutineLogs(updatedLogs);
+      broadcastAndSaveLocalData(nextHousehold, undefined, undefined, nextTxs, undefined, updatedLogs);
+
+      if (isFirebaseConfigured && db) {
+        await updateDoc(doc(db, 'household', 'default'), { balance: currentBalance });
+      }
+    }
+  };
+
+  // ログイン処理
   const login = async (email: string, pass: string, targetRole: Role) => {
     if (isFirebaseConfigured && auth) {
       try {
@@ -239,7 +388,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, error: err.message || '認証に失敗しました。' };
       }
     } else {
-      // デモモード：4文字以上のパスワードを要求
       if (pass.length < 4) {
         return { success: false, error: 'パスワードは4文字以上で入力してください。' };
       }
@@ -254,7 +402,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // ログアウト処理（現在のロールのセッションのみ解除）
+  // ログアウト処理
   const logout = async () => {
     if (isFirebaseConfigured && auth) {
       await firebaseSignOut(auth);
@@ -268,7 +416,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setRole(null);
   };
 
-  // 目標の更新（バリデーション付き）
+  // 目標の更新
   const updateGoal = async (title: string, amount: number) => {
     const cleanAmount = Math.floor(amount);
     if (!title.trim()) {
@@ -361,6 +509,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         status: 'approved',
         bonus: safeBonus,
         processedAt: nowIso,
+        processedBy: currentActor,
         parentComment: parentComment.trim(),
       });
       await updateDoc(doc(db, 'household', 'default'), { balance: nextBalance, updatedAt: nowIso });
@@ -394,7 +543,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // 叱られペナルティ（減額バリデーション強化）
+  // 叱られペナルティ（減額）
   const addPenalty = async (title: string, amount: number, note: string = '') => {
     const cleanAmount = Math.floor(amount);
     if (!title.trim()) {
@@ -436,7 +585,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  // お小遣い使用（出金バリデーション＆残高チェック強化）
+  // お小遣い使用（出金）
   const addSpend = async (title: string, amount: number, note: string = '') => {
     const cleanAmount = Math.floor(amount);
     if (!title.trim()) {
@@ -456,6 +605,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const nextBalance = household.balance - spendAmount;
     const updatedHousehold = { ...household, balance: nextBalance, updatedAt: nowIso };
 
+    const currentActor = currentUser?.email || '保護者';
+
     const newTx: Transaction = {
       id: `tx-${Date.now()}`,
       type: 'spend',
@@ -463,6 +614,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       amount: -spendAmount,
       date: todayDate,
       createdAt: nowIso,
+      createdBy: currentActor,
       note: note.trim(),
     };
     const nextTxs = [newTx, ...transactions];
@@ -478,7 +630,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  // 目標達成時の引き換え（出金＆次の目標案内）
+  // 目標達成時の引き換え
   const redeemGoal = async () => {
     if (household.balance < household.goalAmount) {
       return { success: false, error: '目標金額に達していません。' };
@@ -487,7 +639,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const spendRes = await addSpend(spendTitle, household.goalAmount, '目標達成によるお小遣い引き換え');
     if (!spendRes.success) return spendRes;
 
-    // 次の目標としてリセット
     const nextHousehold = {
       ...household,
       balance: household.balance - household.goalAmount,
@@ -545,6 +696,147 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // --- ルーティン（いつもやること）管理 ---
+
+  // ルーティン追加
+  const addRoutine = async (routine: Omit<RoutineTask, 'id' | 'createdAt'>) => {
+    const newRoutine: RoutineTask = {
+      ...routine,
+      id: `routine-${Date.now()}`,
+      reward: Math.max(0, Math.floor(routine.reward || 0)),
+      penaltyAmount: Math.max(0, Math.floor(routine.penaltyAmount || 0)),
+      graceDays: Math.max(0, Math.floor(routine.graceDays || 0)),
+      createdAt: new Date().toISOString(),
+    };
+    const nextRoutines = [...routines, newRoutine];
+    setRoutines(nextRoutines);
+    broadcastAndSaveLocalData(undefined, undefined, undefined, undefined, nextRoutines);
+
+    if (isFirebaseConfigured && db) {
+      await setDoc(doc(db, 'routines', newRoutine.id), newRoutine);
+    }
+  };
+
+  // ルーティン更新
+  const updateRoutine = async (routine: RoutineTask) => {
+    const updated: RoutineTask = {
+      ...routine,
+      reward: Math.max(0, Math.floor(routine.reward || 0)),
+      penaltyAmount: Math.max(0, Math.floor(routine.penaltyAmount || 0)),
+      graceDays: Math.max(0, Math.floor(routine.graceDays || 0)),
+    };
+    const nextRoutines = routines.map((r) => (r.id === routine.id ? updated : r));
+    setRoutines(nextRoutines);
+    broadcastAndSaveLocalData(undefined, undefined, undefined, undefined, nextRoutines);
+
+    if (isFirebaseConfigured && db) {
+      await setDoc(doc(db, 'routines', routine.id), updated);
+    }
+  };
+
+  // ルーティン削除
+  const deleteRoutine = async (id: string) => {
+    const nextRoutines = routines.filter((r) => r.id !== id);
+    setRoutines(nextRoutines);
+    broadcastAndSaveLocalData(undefined, undefined, undefined, undefined, nextRoutines);
+
+    if (isFirebaseConfigured && db) {
+      await deleteDoc(doc(db, 'routines', id));
+    }
+  };
+
+  // 子ども側からの「おわったよ！」報告
+  const reportRoutineDone = async (routineId: string, targetDate: string) => {
+    const routine = routines.find((r) => r.id === routineId);
+    if (!routine) return;
+
+    const logId = `${routineId}_${targetDate}`;
+    const dueDate = calculateDueDate(targetDate, routine.graceDays);
+    const nowIso = new Date().toISOString();
+
+    const existingLog = routineLogs.find((l) => l.id === logId);
+    const updatedLog: RoutineLog = {
+      id: logId,
+      routineId,
+      targetDate,
+      title: routine.title,
+      reward: routine.reward,
+      penaltyAmount: routine.penaltyAmount,
+      graceDays: routine.graceDays,
+      dueDate,
+      status: 'pending',
+      reportedAt: nowIso,
+    };
+
+    const nextLogs = existingLog
+      ? routineLogs.map((l) => (l.id === logId ? updatedLog : l))
+      : [updatedLog, ...routineLogs];
+
+    setRoutineLogs(nextLogs);
+    broadcastAndSaveLocalData(undefined, undefined, undefined, undefined, undefined, nextLogs);
+
+    if (isFirebaseConfigured && db) {
+      await setDoc(doc(db, 'routineLogs', logId), updatedLog);
+    }
+  };
+
+  // 親によるルーティン承認
+  const approveRoutineLog = async (logId: string) => {
+    const rLog = routineLogs.find((l) => l.id === logId);
+    if (!rLog || rLog.status !== 'pending') return;
+
+    const nowIso = new Date().toISOString();
+    const todayDate = nowIso.split('T')[0];
+    const currentActor = currentUser?.email || '保護者';
+
+    const updatedLog: RoutineLog = {
+      ...rLog,
+      status: 'completed',
+      approvedAt: nowIso,
+      approvedBy: currentActor,
+    };
+
+    const nextLogs = routineLogs.map((l) => (l.id === logId ? updatedLog : l));
+    let nextBalance = household.balance;
+    let nextTxs = transactions;
+
+    // ご褒美金額がゼロ超の場合は残高加算＆取引履歴作成
+    if (rLog.reward > 0) {
+      nextBalance = household.balance + rLog.reward;
+      const newTx: Transaction = {
+        id: `tx-routine-${Date.now()}`,
+        type: 'chore',
+        title: `いつもやること達成: ${rLog.title}`,
+        amount: rLog.reward,
+        date: todayDate,
+        createdAt: nowIso,
+        createdBy: currentActor,
+        note: `${rLog.targetDate}実施分を承認`,
+      };
+      nextTxs = [newTx, ...transactions];
+
+      if (isFirebaseConfigured && db) {
+        await setDoc(doc(db, 'transactions', newTx.id), newTx);
+      }
+    }
+
+    const updatedHousehold = { ...household, balance: nextBalance, updatedAt: nowIso };
+
+    setRoutineLogs(nextLogs);
+    setHousehold(updatedHousehold);
+    setTransactions(nextTxs);
+    broadcastAndSaveLocalData(updatedHousehold, undefined, undefined, nextTxs, undefined, nextLogs);
+
+    if (isFirebaseConfigured && db) {
+      await updateDoc(doc(db, 'routineLogs', logId), {
+        status: 'completed',
+        approvedAt: nowIso,
+        approvedBy: currentActor,
+      });
+      await updateDoc(doc(db, 'household', 'default'), { balance: nextBalance, updatedAt: nowIso });
+    }
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -554,6 +846,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         chores,
         requests,
         transactions,
+        routines,
+        routineLogs,
+        fontSize,
+        setFontSize,
         isDemoMode,
         login,
         logout,
@@ -567,6 +863,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateChoreMaster,
         deleteChoreMaster,
         redeemGoal,
+        addRoutine,
+        updateRoutine,
+        deleteRoutine,
+        reportRoutineDone,
+        approveRoutineLog,
+        checkAndApplyOverduePenalties,
       }}
     >
       {children}

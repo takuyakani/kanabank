@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { CalendarView } from '../components/CalendarView';
+import { isTaskScheduledForDate } from '../utils/scheduleUtils';
+import type { FontSizePreference } from '../types';
 import {
   Coins,
   Trophy,
@@ -17,7 +19,11 @@ import {
   XCircle,
   Gift,
   AlertCircle,
-  Calendar
+  Calendar,
+  Check,
+  Flame,
+  AlertTriangle,
+  Type
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -31,11 +37,33 @@ const ICON_MAP: Record<string, React.ReactNode> = {
 };
 
 export const ChildDashboard: React.FC = () => {
-  const { household, chores, requests, transactions, submitChoreRequest, logout, updateGoal, redeemGoal } = useApp();
+  const {
+    household,
+    chores,
+    requests,
+    transactions,
+    routines,
+    routineLogs,
+    fontSize,
+    setFontSize,
+    submitChoreRequest,
+    reportRoutineDone,
+    checkAndApplyOverduePenalties,
+    logout,
+    updateGoal,
+    redeemGoal
+  } = useApp();
+
   const [selectedChoreId, setSelectedChoreId] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [reportingRoutineId, setReportingRoutineId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'home' | 'apply' | 'calendar'>('home');
+
+  // アプリ起動・画面表示時に期限切れペナルティを自動判定
+  useEffect(() => {
+    checkAndApplyOverduePenalties();
+  }, [checkAndApplyOverduePenalties]);
 
   // 目標編集モーダル
   const [isEditingGoal, setIsEditingGoal] = useState(false);
@@ -50,6 +78,26 @@ export const ChildDashboard: React.FC = () => {
   // 達成率計算
   const isGoalReached = household.balance >= household.goalAmount && household.goalAmount > 0;
   const progressPercent = Math.min(100, Math.floor((household.balance / (household.goalAmount || 1)) * 100));
+
+  // 今日のルーティン抽出
+  const todayObj = new Date();
+  const y = todayObj.getFullYear();
+  const m = String(todayObj.getMonth() + 1).padStart(2, '0');
+  const d = String(todayObj.getDate()).padStart(2, '0');
+  const todayStr = `${y}-${m}-${d}`;
+
+  const todayRoutines = routines.filter((r) => isTaskScheduledForDate(r, todayObj));
+
+  const handleRoutineDone = async (routineId: string) => {
+    setReportingRoutineId(routineId);
+    await reportRoutineDone(routineId, todayStr);
+    setReportingRoutineId(null);
+    confetti({
+      particleCount: 50,
+      spread: 60,
+      origin: { y: 0.6 },
+    });
+  };
 
   const handleApply = async () => {
     if (!selectedChoreId) return;
@@ -99,7 +147,7 @@ export const ChildDashboard: React.FC = () => {
   return (
     <div className="max-w-md mx-auto min-h-screen bg-amber-50/50 pb-28 flex flex-col">
       {/* トップバー */}
-      <header className="px-5 py-3.5 bg-white/90 backdrop-blur border-b border-amber-100 flex items-center justify-between sticky top-0 z-20">
+      <header className="px-4 py-3 bg-white/90 backdrop-blur border-b border-amber-100 flex items-center justify-between sticky top-0 z-20">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-full bg-amber-400 flex items-center justify-center text-white font-black text-sm">
             お
@@ -109,13 +157,35 @@ export const ChildDashboard: React.FC = () => {
             <p className="text-[10px] text-amber-600 font-medium">がんばってお手伝いしよう！</p>
           </div>
         </div>
-        <button
-          onClick={logout}
-          className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
-          title="ログアウト"
-        >
-          <LogOut className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-2">
+          {/* 文字サイズ変更 */}
+          <div className="flex items-center bg-slate-100 rounded-xl p-0.5 border border-slate-200">
+            <span className="text-[10px] text-slate-400 pl-1 pr-0.5 flex items-center" title="文字サイズ">
+              <Type className="w-3 h-3" />
+            </span>
+            {(['small', 'medium', 'large'] as FontSizePreference[]).map((size) => (
+              <button
+                key={size}
+                onClick={() => setFontSize(size)}
+                className={`px-1.5 py-0.5 text-[10px] font-bold rounded-lg transition ${
+                  fontSize === size
+                    ? 'bg-amber-500 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                {size === 'small' ? '小' : size === 'medium' ? '中' : '大'}
+              </button>
+            ))}
+          </div>
+
+          <button
+            onClick={logout}
+            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+            title="ログアウト"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
       </header>
 
       {/* メインコンテンツ */}
@@ -159,6 +229,108 @@ export const ChildDashboard: React.FC = () => {
                 </button>
               </div>
             )}
+
+            {/* 今日の「いつもやること（ルーティン）」カード */}
+            <div className="bg-white rounded-3xl p-5 shadow-sm border border-amber-100/80">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Flame className="w-5 h-5 text-amber-500" />
+                  <h3 className="font-extrabold text-slate-800 text-sm">きょうの いつもやること</h3>
+                </div>
+                <span className="text-[10px] font-bold bg-amber-50 text-amber-600 px-2 py-0.5 rounded-full border border-amber-100">
+                  {todayRoutines.length}件
+                </span>
+              </div>
+
+              {todayRoutines.length === 0 ? (
+                <div className="text-center py-4 bg-slate-50/70 rounded-2xl border border-slate-100">
+                  <p className="text-xs text-slate-400 font-medium">きょうのいつもやることはないよ！</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">よくがんばったね！</p>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {todayRoutines.map((routine) => {
+                    const logId = `${routine.id}_${todayStr}`;
+                    const log = routineLogs.find((l) => l.id === logId);
+                    const isDone = Boolean(log);
+                    const isApproved = log?.status === 'completed';
+                    const isPending = log?.status === 'pending';
+                    const isPenalty = log?.status === 'penalized';
+
+                    return (
+                      <div
+                        key={routine.id}
+                        className={`p-3.5 rounded-2xl border transition flex items-center justify-between gap-3 ${
+                          isApproved
+                            ? 'bg-emerald-50/70 border-emerald-100'
+                            : isPending
+                            ? 'bg-amber-50/70 border-amber-200'
+                            : isPenalty
+                            ? 'bg-rose-50/70 border-rose-200'
+                            : 'bg-slate-50/90 border-slate-100 hover:border-amber-200'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-slate-800 text-xs">{routine.title}</span>
+                            {/* ご褒美金額: 0円の時は表示しない（仕様準拠） */}
+                            {routine.reward > 0 && (
+                              <span className="text-[10px] font-extrabold text-amber-600 bg-amber-100/60 px-1.5 py-0.2 rounded-md">
+                                +{routine.reward}円
+                              </span>
+                            )}
+                            {/* ペナルティ金額表示 */}
+                            {routine.penaltyAmount > 0 && (
+                              <span className="text-[10px] font-bold text-rose-500 bg-rose-50 px-1.5 py-0.2 rounded-md flex items-center gap-0.5">
+                                <AlertTriangle className="w-2.5 h-2.5 inline" />
+                                未達成-{routine.penaltyAmount}円
+                              </span>
+                            )}
+                          </div>
+                          {routine.graceDays > 0 && !isDone && (
+                            <p className="text-[10px] text-slate-400 mt-0.5">
+                              猶予: あと{routine.graceDays}日
+                            </p>
+                          )}
+                        </div>
+
+                        {/* アクションボタン / ステータス */}
+                        <div className="shrink-0">
+                          {isApproved && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-extrabold text-emerald-700 bg-emerald-100 px-3 py-1.5 rounded-xl shadow-2xs">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> 完了！
+                            </span>
+                          )}
+
+                          {isPending && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 bg-amber-200/70 px-2.5 py-1.5 rounded-xl">
+                              <Clock className="w-3.5 h-3.5 animate-pulse" /> かくにん中
+                            </span>
+                          )}
+
+                          {isPenalty && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 bg-rose-100 px-2.5 py-1.5 rounded-xl">
+                              <XCircle className="w-3.5 h-3.5" /> 期限切れ
+                            </span>
+                          )}
+
+                          {!isDone && (
+                            <button
+                              onClick={() => handleRoutineDone(routine.id)}
+                              disabled={reportingRoutineId === routine.id}
+                              className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 active:scale-95 text-white font-extrabold text-xs shadow-md shadow-amber-200 transition flex items-center gap-1"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              {reportingRoutineId === routine.id ? '送信中...' : 'おわったよ！'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
 
             {/* 目標プログレスカード */}
             <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">

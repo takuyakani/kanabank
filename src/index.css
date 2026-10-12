@@ -6,6 +6,19 @@
   color: #2d3748;
 }
 
+/* 文字サイズ設定クラス（アカウント毎にhtmlまたはrootに適用） */
+html.font-size-small {
+  font-size: 14px;
+}
+
+html.font-size-medium {
+  font-size: 16px;
+}
+
+html.font-size-large {
+  font-size: 18px;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
