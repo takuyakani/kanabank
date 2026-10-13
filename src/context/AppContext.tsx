@@ -77,6 +77,7 @@ interface AppContextType {
   deleteRoutine: (id: string) => Promise<void>;
   reportRoutineDone: (routineId: string, targetDate: string) => Promise<void>;
   approveRoutineLog: (logId: string) => Promise<{ success: boolean; error?: string }>;
+  rejectRoutineLog: (logId: string) => Promise<{ success: boolean; error?: string }>;
   checkAndApplyOverduePenalties: () => Promise<void>;
   // クラウド同期状態
   syncStatus: 'connected' | 'syncing' | 'error' | 'local';
@@ -1237,6 +1238,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
+  // 親によるルーティン報告の差戻し（未報告・実施前の初期状態に戻す）
+  const rejectRoutineLog = async (logId: string): Promise<{ success: boolean; error?: string }> => {
+    const rLog = routineLogs.find((l) => l.id === logId);
+    if (!rLog) {
+      console.warn('Routine log not found for rejection:', logId);
+      return { success: false, error: '対象のいつもやること報告が見つかりませんでした。' };
+    }
+
+    // 対象のログを一覧から削除することで、子ども側では報告前の初期状態（「おわったよ！」ボタン表示）に戻る
+    const nextLogs = routineLogs.filter((l) => l.id !== logId);
+    setRoutineLogs(nextLogs);
+    broadcastAndSaveLocalData(undefined, undefined, undefined, undefined, undefined, nextLogs);
+
+    if (isFirebaseConfigured && db) {
+      try {
+        await deleteDoc(doc(db, 'routineLogs', logId));
+      } catch (err) {
+        console.warn('Firebase routineLogs delete error on reject (local state preserved):', err);
+      }
+    }
+
+    return { success: true };
+  };
+
   // 単一履歴（トランザクション）の修正
   const updateTransaction = async (updatedTx: Transaction): Promise<{ success: boolean; error?: string }> => {
     const existing = transactions.find((t) => t.id === updatedTx.id);
@@ -1445,6 +1470,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteRoutine,
         reportRoutineDone,
         approveRoutineLog,
+        rejectRoutineLog,
         checkAndApplyOverduePenalties,
         updateTransaction,
         deleteTransaction,

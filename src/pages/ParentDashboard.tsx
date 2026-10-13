@@ -68,6 +68,7 @@ export const ParentDashboard: React.FC = () => {
     updateRoutine,
     deleteRoutine,
     approveRoutineLog,
+    rejectRoutineLog,
     clearAllTransactions,
     restoreTransactions,
     importBackupData,
@@ -148,6 +149,7 @@ export const ParentDashboard: React.FC = () => {
   const [parentCommentInput, setParentCommentInput] = useState('');
   const [approveSuccessToast, setApproveSuccessToast] = useState<string | null>(null);
   const [approvingRoutineLogId, setApprovingRoutineLogId] = useState<string | null>(null);
+  const [rejectingRoutineLogId, setRejectingRoutineLogId] = useState<string | null>(null);
 
   // 目標達成引き換え
   const [goalRedeemSuccess, setGoalRedeemSuccess] = useState(false);
@@ -306,6 +308,26 @@ export const ParentDashboard: React.FC = () => {
       console.error('いつもやること承認エラー:', err);
     } finally {
       setApprovingRoutineLogId(null);
+    }
+  };
+
+  const handleRejectRoutine = async (log: RoutineLog) => {
+    if (!window.confirm(`「${log.title}」の完了報告を差し戻しますか？\n（子ども側の画面で報告前の状態に戻ります）`)) {
+      return;
+    }
+    setRejectingRoutineLogId(log.id);
+    try {
+      const res = await rejectRoutineLog(log.id);
+      if (res && !res.success) {
+        alert(res.error || '差戻しに失敗しました');
+        return;
+      }
+      setApproveSuccessToast(`「いつもやること: ${log.title}」を差し戻しました。子ども画面で報告前の状態に戻りました。`);
+      setTimeout(() => setApproveSuccessToast(null), 3500);
+    } catch (err) {
+      console.error('いつもやること差戻しエラー:', err);
+    } finally {
+      setRejectingRoutineLogId(null);
     }
   };
 
@@ -1006,14 +1028,24 @@ export const ParentDashboard: React.FC = () => {
                           )}
                         </div>
                       </div>
-                      <button
-                        onClick={() => handleApproveRoutine(log)}
-                        disabled={approvingRoutineLogId === log.id}
-                        className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs transition shrink-0 ml-2 flex items-center gap-1 cursor-pointer"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        {approvingRoutineLogId === log.id ? '承認中...' : '承認'}
-                      </button>
+                      <div className="flex items-center gap-2 shrink-0 ml-2">
+                        <button
+                          onClick={() => handleRejectRoutine(log)}
+                          disabled={rejectingRoutineLogId === log.id || approvingRoutineLogId === log.id}
+                          className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-600 font-bold text-xs shadow-2xs transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          {rejectingRoutineLogId === log.id ? '差戻し中...' : '差戻し'}
+                        </button>
+                        <button
+                          onClick={() => handleApproveRoutine(log)}
+                          disabled={approvingRoutineLogId === log.id || rejectingRoutineLogId === log.id}
+                          className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          {approvingRoutineLogId === log.id ? '承認中...' : '承認'}
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
