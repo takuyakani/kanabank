@@ -82,6 +82,8 @@ interface AppContextType {
   syncStatus: 'connected' | 'syncing' | 'error' | 'local';
   syncErrorMessage: string | null;
   // 履歴管理
+  updateTransaction: (transaction: Transaction) => Promise<{ success: boolean; error?: string }>;
+  deleteTransaction: (id: string) => Promise<{ success: boolean; error?: string }>;
   clearAllTransactions: () => Promise<void>;
   restoreTransactions: (txs: Transaction[]) => Promise<void>;
   importBackupData: (backup: any) => Promise<{ success: boolean; error?: string }>;
@@ -1188,6 +1190,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
+  // 単一履歴（トランザクション）の修正
+  const updateTransaction = async (updatedTx: Transaction): Promise<{ success: boolean; error?: string }> => {
+    const existing = transactions.find((t) => t.id === updatedTx.id);
+    if (!existing) {
+      return { success: false, error: '対象の履歴が見つかりません。' };
+    }
+
+    // 金額差分を残高に反映（新金額 - 旧金額）
+    const diff = Math.floor(updatedTx.amount) - Math.floor(existing.amount);
+    const nextBalance = Math.max(0, household.balance + diff);
+    const nowIso = new Date().toISOString();
+    const updatedHousehold = diff !== 0 ? { ...household, balance: nextBalance, updatedAt: nowIso } : household;
+
+    const cleanedTx: Transaction = {
+      ...updatedTx,
+      amount: Math.floor(updatedTx.amount),
+      title: updatedTx.title.trim(),
+      note: updatedTx.note?.trim() || '',
+    };
+
+    const nextTxs = transactions.map((t) => (t.id === updatedTx.id ? cleanedTx : t));
+
+    setTransactions(nextTxs);
+    if (diff !== 0) {
+      setHousehold(updatedHousehold);
+    }
+    broadcastAndSaveLocalData(diff !== 0 ? updatedHousehold : undefined, undefined, undefined, nextTxs);
+
+    if (isFirebaseConfigured && db) {
+      const firestoreDb: Firestore = db;
+      try {
+        const promises: Promise<any>[] = [
+          setDoc(doc(firestoreDb, 'transactions', cleanedTx.id), cleanedTx, { merge: true }),
+        ];
+        if (diff !== 0) {
+          promises.push(
+            setDoc(doc(firestoreDb, 'household', 'default'), { balance: nextBalance, updatedAt: nowIso }, { merge: true })
+          );
+        }
+        await Promise.all(promises);
+      } catch (err) {
+        console.warn('Firebase updateTransaction sync error:', err);
+      }
+    }
+
+    return { success: true };
+  };
+
+  // 単一履歴（トランザクション）の削除
+  const deleteTransaction = async (id: string): Promise<{ success: boolean; error?: string }> => {
+    const target = transactions.find((t) => t.id === id);
+    if (!target) {
+      return { success: false, error: '対象の履歴が見つかりません。' };
+    }
+
+    // 削除に伴い、対象の金額を残高から差し戻す（残高 - 対象金額）
+    const nextBalance = Math.max(0, household.balance - target.amount);
+    const nowIso = new Date().toISOString();
+    const updatedHousehold = { ...household, balance: nextBalance, updatedAt: nowIso };
+
+    const nextTxs = transactions.filter((t) => t.id !== id);
+
+    setTransactions(nextTxs);
+    setHousehold(updatedHousehold);
+    broadcastAndSaveLocalData(updatedHousehold, undefined, undefined, nextTxs);
+
+    if (isFirebaseConfigured && db) {
+      const firestoreDb: Firestore = db;
+      try {
+        await Promise.all([
+          deleteDoc(doc(firestoreDb, 'transactions', id)),
+          setDoc(doc(firestoreDb, 'household', 'default'), { balance: nextBalance, updatedAt: nowIso }, { merge: true }),
+        ]);
+      } catch (err) {
+        console.warn('Firebase deleteTransaction sync error:', err);
+      }
+    }
+
+    return { success: true };
+  };
+
   // 履歴（トランザクション）を全削除する保護者機能
   const clearAllTransactions = async () => {
     setTransactions([]);
@@ -1316,6 +1399,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         reportRoutineDone,
         approveRoutineLog,
         checkAndApplyOverduePenalties,
+        updateTransaction,
+        deleteTransaction,
         clearAllTransactions,
         restoreTransactions,
         importBackupData,
