@@ -1003,6 +1003,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // --- ルーティン（いつもやること）管理 ---
 
+  // Firestore用のサニタイズ（undefinedのプロパティを完全除去）
+  const cleanRoutineForFirestore = (routine: RoutineTask): Record<string, any> => {
+    const data: Record<string, any> = {
+      id: routine.id,
+      title: routine.title,
+      reward: routine.reward,
+      penaltyAmount: routine.penaltyAmount,
+      graceDays: routine.graceDays,
+      scheduleType: routine.scheduleType,
+      active: routine.active,
+      createdAt: routine.createdAt,
+    };
+    if (routine.scheduleConfig !== undefined && routine.scheduleConfig !== null) {
+      data.scheduleConfig = routine.scheduleConfig;
+    }
+    return data;
+  };
+
   // ルーティン追加
   const addRoutine = async (routine: Omit<RoutineTask, 'id' | 'createdAt'>) => {
     const newRoutine: RoutineTask = {
@@ -1019,7 +1037,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (isFirebaseConfigured && db) {
       try {
-        await setDoc(doc(db, 'routines', newRoutine.id), newRoutine, { merge: true });
+        const firestoreData = cleanRoutineForFirestore(newRoutine);
+        await setDoc(doc(db, 'routines', newRoutine.id), firestoreData, { merge: true });
       } catch (err) {
         console.warn('Firebase routines add error (local state preserved):', err);
       }
@@ -1040,7 +1059,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (isFirebaseConfigured && db) {
       try {
-        await setDoc(doc(db, 'routines', routine.id), updated, { merge: true });
+        const firestoreData = cleanRoutineForFirestore(updated);
+        await setDoc(doc(db, 'routines', routine.id), firestoreData, { merge: true });
       } catch (err) {
         console.warn('Firebase routines update error (local state preserved):', err);
       }

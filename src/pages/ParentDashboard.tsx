@@ -124,6 +124,7 @@ export const ParentDashboard: React.FC = () => {
 
   // ルーティン編集モーダル
   const [isEditingRoutine, setIsEditingRoutine] = useState(false);
+  const [routineError, setRoutineError] = useState('');
   const [editingRoutineData, setEditingRoutineData] = useState<Partial<RoutineTask>>({
     title: '',
     reward: 0,
@@ -426,14 +427,25 @@ export const ParentDashboard: React.FC = () => {
 
   const handleSaveRoutine = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingRoutineData.title?.trim() || isSavingRoutine) return;
+    setRoutineError('');
+    const trimmedTitle = editingRoutineData.title?.trim();
+    if (!trimmedTitle) {
+      setRoutineError('タスク名を入力してください。');
+      return;
+    }
+    if (isSavingRoutine) return;
 
     setIsSavingRoutine(true);
     try {
       const schedType = (editingRoutineData.scheduleType || 'daily') as ScheduleType;
-      let configObj: RoutineTask['scheduleConfig'] = undefined;
+      let configObj: RoutineTask['scheduleConfig'] | undefined = undefined;
 
       if (schedType === 'weekly_days') {
+        if (!routineDaysOfWeek || routineDaysOfWeek.length === 0) {
+          setRoutineError('実施する曜日を少なくとも1つ選択してください。');
+          setIsSavingRoutine(false);
+          return;
+        }
         configObj = { daysOfWeek: routineDaysOfWeek };
       } else if (schedType === 'monthly_date') {
         configObj = { dayOfMonth: routineDayOfMonth };
@@ -442,33 +454,41 @@ export const ParentDashboard: React.FC = () => {
       }
 
       if (editingRoutineData.id) {
-        await updateRoutine({
+        const updatePayload: RoutineTask = {
           ...(editingRoutineData as RoutineTask),
-          title: editingRoutineData.title.trim(),
-          reward: Number(editingRoutineData.reward || 0),
-          penaltyAmount: Number(editingRoutineData.penaltyAmount || 0),
-          graceDays: Number(editingRoutineData.graceDays || 0),
+          title: trimmedTitle,
+          reward: Math.max(0, Math.floor(Number(editingRoutineData.reward || 0))),
+          penaltyAmount: Math.max(0, Math.floor(Number(editingRoutineData.penaltyAmount || 0))),
+          graceDays: Math.max(0, Math.floor(Number(editingRoutineData.graceDays || 0))),
           scheduleType: schedType,
-          scheduleConfig: configObj,
           active: editingRoutineData.active ?? true,
-        });
+        };
+        if (configObj) {
+          updatePayload.scheduleConfig = configObj;
+        } else {
+          delete updatePayload.scheduleConfig;
+        }
+        await updateRoutine(updatePayload);
       } else {
-        await addRoutine({
-          title: editingRoutineData.title.trim(),
-          reward: Number(editingRoutineData.reward || 0),
-          penaltyAmount: Number(editingRoutineData.penaltyAmount || 0),
-          graceDays: Number(editingRoutineData.graceDays || 0),
+        const newRoutinePayload: Omit<RoutineTask, 'id' | 'createdAt'> = {
+          title: trimmedTitle,
+          reward: Math.max(0, Math.floor(Number(editingRoutineData.reward || 0))),
+          penaltyAmount: Math.max(0, Math.floor(Number(editingRoutineData.penaltyAmount || 0))),
+          graceDays: Math.max(0, Math.floor(Number(editingRoutineData.graceDays || 0))),
           scheduleType: schedType,
-          scheduleConfig: configObj,
           active: true,
-        });
+        };
+        if (configObj) {
+          newRoutinePayload.scheduleConfig = configObj;
+        }
+        await addRoutine(newRoutinePayload);
       }
       setIsEditingRoutine(false);
       setRoutineSavedSuccess(true);
       setTimeout(() => setRoutineSavedSuccess(false), 3000);
     } catch (err) {
       console.error('ルーティン保存エラー:', err);
-      setIsEditingRoutine(false);
+      setRoutineError('いつもやることの保存中にエラーが発生しました。再度お試しください。');
     } finally {
       setIsSavingRoutine(false);
     }
@@ -1070,6 +1090,7 @@ export const ParentDashboard: React.FC = () => {
                 </div>
                 <button
                   onClick={() => {
+                    setRoutineError('');
                     setEditingRoutineData({
                       title: '',
                       reward: 0,
@@ -1091,29 +1112,37 @@ export const ParentDashboard: React.FC = () => {
               </div>
 
               <div className="space-y-2.5">
-                {routines.map((routine) => (
-                  <div
-                    key={routine.id}
-                    className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h4 className="font-bold text-xs text-slate-800">{routine.title}</h4>
-                        <span className="text-[10px] bg-slate-200/70 text-slate-600 px-2 py-0.5 rounded-md font-semibold">
-                          {formatScheduleDescription(routine)}
-                        </span>
+                {routines.length === 0 ? (
+                  <div className="py-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                    <Clock className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                    <p className="text-xs font-bold text-slate-600">まだ「いつもやること」が登録されていません</p>
+                    <p className="text-[11px] text-slate-400 mt-1">上の「新規作成」ボタンから追加してください。</p>
+                  </div>
+                ) : (
+                  routines.map((routine) => (
+                    <div
+                      key={routine.id}
+                      className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-bold text-xs text-slate-800">{routine.title}</h4>
+                          <span className="text-[10px] bg-slate-200/70 text-slate-600 px-2 py-0.5 rounded-md font-semibold">
+                            {formatScheduleDescription(routine)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-[11px] mt-1.5">
+                          {routine.reward > 0 ? (
+                            <span className="text-emerald-700 font-extrabold">+{routine.reward} 円</span>
+                          ) : null}
+                          <span className="text-rose-600 font-extrabold">未達成: -{routine.penaltyAmount} 円</span>
+                          <span className="text-slate-400">猶予: {routine.graceDays}日</span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-3 text-[11px] mt-1.5">
-                        {routine.reward > 0 ? (
-                          <span className="text-emerald-700 font-extrabold">+{routine.reward} 円</span>
-                        ) : null}
-                        <span className="text-rose-600 font-extrabold">未達成: -{routine.penaltyAmount} 円</span>
-                        <span className="text-slate-400">猶予: {routine.graceDays}日</span>
-                      </div>
-                    </div>
                       <div className="flex items-center gap-1.5 shrink-0 ml-2">
                         <button
                           onClick={() => {
+                            setRoutineError('');
                             setEditingRoutineData(routine);
                             if (routine.scheduleConfig?.daysOfWeek) setRoutineDaysOfWeek(routine.scheduleConfig.daysOfWeek);
                             if (routine.scheduleConfig?.dayOfMonth) setRoutineDayOfMonth(routine.scheduleConfig.dayOfMonth);
@@ -1136,8 +1165,9 @@ export const ParentDashboard: React.FC = () => {
                         </button>
                       </div>
                     </div>
-                  ))}
-                </div>
+                  ))
+                )}
+              </div>
               </div>
             </div>
           )}
@@ -1929,6 +1959,14 @@ export const ParentDashboard: React.FC = () => {
             <h3 className="font-bold text-base text-slate-800 pr-6">
               {editingRoutineData.id ? '「いつもやること」の編集' : '新しい「いつもやること」を作成'}
             </h3>
+
+            {routineError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-600 text-xs rounded-xl flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{routineError}</span>
+              </div>
+            )}
+
             <form onSubmit={handleSaveRoutine} className="space-y-3 text-xs">
               <div>
                 <label className="block font-bold text-slate-700 mb-1">タスク名</label>
