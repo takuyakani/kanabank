@@ -81,6 +81,8 @@ interface AppContextType {
   // クラウド同期状態
   syncStatus: 'connected' | 'syncing' | 'error' | 'local';
   syncErrorMessage: string | null;
+  updateChoreRequest: (request: ChoreRequest) => Promise<{ success: boolean; error?: string }>;
+  deleteChoreRequest: (id: string) => Promise<{ success: boolean; error?: string }>;
   // 履歴管理
   updateTransaction: (transaction: Transaction) => Promise<{ success: boolean; error?: string }>;
   deleteTransaction: (id: string) => Promise<{ success: boolean; error?: string }>;
@@ -779,6 +781,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // 申請の修正（申請中またはやり直しの明細）
+  const updateChoreRequest = async (updatedReq: ChoreRequest): Promise<{ success: boolean; error?: string }> => {
+    const existing = requests.find((r) => r.id === updatedReq.id);
+    if (!existing) {
+      return { success: false, error: '対象の申請が見つかりません。' };
+    }
+
+    const cleanedReq: ChoreRequest = {
+      ...updatedReq,
+      title: updatedReq.title.trim(),
+      reward: Math.max(0, Math.floor(updatedReq.reward)),
+      comment: updatedReq.comment?.trim() || '',
+      parentComment: updatedReq.parentComment?.trim() || '',
+    };
+
+    const nextRequests = requests.map((r) => (r.id === updatedReq.id ? cleanedReq : r));
+    setRequests(nextRequests);
+    broadcastAndSaveLocalData(undefined, undefined, nextRequests);
+
+    if (isFirebaseConfigured && db) {
+      try {
+        await setDoc(doc(db, 'requests', cleanedReq.id), cleanedReq, { merge: true });
+      } catch (err) {
+        console.warn('Firebase updateChoreRequest error:', err);
+      }
+    }
+    return { success: true };
+  };
+
+  // 申請の削除（申請中またはやり直しの明細）
+  const deleteChoreRequest = async (id: string): Promise<{ success: boolean; error?: string }> => {
+    const nextRequests = requests.filter((r) => r.id !== id);
+    setRequests(nextRequests);
+    broadcastAndSaveLocalData(undefined, undefined, nextRequests);
+
+    if (isFirebaseConfigured && db) {
+      try {
+        await deleteDoc(doc(db, 'requests', id));
+      } catch (err) {
+        console.warn('Firebase deleteChoreRequest error:', err);
+      }
+    }
+    return { success: true };
+  };
+
   // 叱られペナルティ（減額）
   const addPenalty = async (title: string, amount: number, note: string = '') => {
     const cleanAmount = Math.floor(amount);
@@ -1401,6 +1448,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         checkAndApplyOverduePenalties,
         updateTransaction,
         deleteTransaction,
+        updateChoreRequest,
+        deleteChoreRequest,
         clearAllTransactions,
         restoreTransactions,
         importBackupData,

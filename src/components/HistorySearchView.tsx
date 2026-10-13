@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import type { Transaction } from '../types';
+import type { Transaction, ChoreRequest } from '../types';
 import { useApp } from '../context/AppContext';
 import {
   Search,
@@ -24,18 +24,34 @@ interface HistorySearchViewProps {
   variant?: 'child' | 'parent';
 }
 
+// 履歴と申請を統合した表示用アイテムの定義
+export interface HistoryDisplayItem {
+  id: string;
+  sourceType: 'transaction' | 'request';
+  title: string;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  type: 'chore' | 'penalty' | 'spend';
+  status?: 'pending' | 'rejected' | 'approved';
+  note?: string;
+  createdBy?: string;
+  createdAt: string; // ISO string
+  originalTransaction?: Transaction;
+  originalRequest?: ChoreRequest;
+}
+
 export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
   transactions,
   onSelectTransaction,
   variant = 'parent',
 }) => {
-  const { updateTransaction, deleteTransaction } = useApp();
+  const { updateTransaction, deleteTransaction, requests, updateChoreRequest, deleteChoreRequest } = useApp();
   const [keyword, setKeyword] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'chore' | 'penalty' | 'spend'>('all');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'chore' | 'penalty' | 'spend' | 'pending' | 'rejected'>('all');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
-  const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
+  const [selectedItem, setSelectedItem] = useState<HistoryDisplayItem | null>(null);
 
   // 編集モード用の状態
   const [isEditing, setIsEditing] = useState(false);
@@ -51,31 +67,80 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
 
+  const isParent = variant === 'parent';
+
+  // 全履歴アイテムの統合
+  const allItems = useMemo<HistoryDisplayItem[]>(() => {
+    // 通常の確定済みトランザクション
+    const txItems: HistoryDisplayItem[] = transactions.map((tx) => ({
+      id: tx.id,
+      sourceType: 'transaction',
+      title: tx.title,
+      amount: tx.amount,
+      date: tx.date,
+      type: tx.type,
+      status: 'approved',
+      note: tx.note,
+      createdBy: tx.createdBy,
+      createdAt: tx.createdAt,
+      originalTransaction: tx,
+    }));
+
+    // 親画面の場合、未承認（pending）またはやり直し（rejected）のお手伝い申請も表示に統合
+    let reqItems: HistoryDisplayItem[] = [];
+    if (isParent && requests) {
+      reqItems = requests
+        .filter((r) => r.status === 'pending' || r.status === 'rejected')
+        .map((r) => {
+          const reqDate = r.requestedAt ? r.requestedAt.slice(0, 10) : '';
+          return {
+            id: r.id,
+            sourceType: 'request',
+            title: r.title,
+            amount: r.reward,
+            date: reqDate,
+            type: 'chore' as const,
+            status: r.status,
+            note: r.status === 'rejected' && r.parentComment ? `【やり直し理由】${r.parentComment}` : r.comment,
+            createdBy: '子ども',
+            createdAt: r.requestedAt || new Date().toISOString(),
+            originalRequest: r,
+          };
+        });
+    }
+
+    return [...txItems, ...reqItems];
+  }, [transactions, requests, isParent]);
+
   // フィルタリング処理
-  const filteredTransactions = useMemo(() => {
-    return transactions.filter((tx) => {
+  const filteredItems = useMemo(() => {
+    return allItems.filter((item) => {
       // 検索ワード判定（タイトル、メモ、実行者）
       if (keyword.trim()) {
         const query = keyword.trim().toLowerCase();
-        const matchTitle = tx.title.toLowerCase().includes(query);
-        const matchNote = tx.note ? tx.note.toLowerCase().includes(query) : false;
-        const matchCreatedBy = tx.createdBy ? tx.createdBy.toLowerCase().includes(query) : false;
+        const matchTitle = item.title.toLowerCase().includes(query);
+        const matchNote = item.note ? item.note.toLowerCase().includes(query) : false;
+        const matchCreatedBy = item.createdBy ? item.createdBy.toLowerCase().includes(query) : false;
         if (!matchTitle && !matchNote && !matchCreatedBy) return false;
       }
 
       // 種類フィルター
       if (typeFilter !== 'all') {
-        if (typeFilter === 'chore') {
+        if (typeFilter === 'pending') {
+          if (item.status !== 'pending') return false;
+        } else if (typeFilter === 'rejected') {
+          if (item.status !== 'rejected') return false;
+        } else if (typeFilter === 'chore') {
           // お手伝い または いつもやること
-          if (tx.type !== 'chore') return false;
-        } else if (tx.type !== typeFilter) {
+          if (item.type !== 'chore') return false;
+        } else if (item.type !== typeFilter) {
           return false;
         }
       }
 
       // 日付範囲判定 (YYYY-MM-DD)
-      if (startDate && tx.date < startDate) return false;
-      if (endDate && tx.date > endDate) return false;
+      if (startDate && item.date < startDate) return false;
+      if (endDate && item.date > endDate) return false;
 
       return true;
     }).sort((a, b) => {
@@ -85,44 +150,50 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
         return a.date.localeCompare(b.date) || a.createdAt.localeCompare(a.createdAt);
       }
     });
-  }, [transactions, keyword, startDate, endDate, typeFilter, sortOrder]);
+  }, [allItems, keyword, startDate, endDate, typeFilter, sortOrder]);
 
-  // 取引タイプ別の合計集計
+  // 確定済み取引タイプ別の合計集計（未承認・やり直しは残高未加算のため除外）
   const summary = useMemo(() => {
     let earned = 0;
     let penalized = 0;
     let spent = 0;
 
-    filteredTransactions.forEach((tx) => {
-      if (tx.type === 'chore') {
-        earned += Math.max(0, tx.amount);
-      } else if (tx.type === 'penalty') {
-        penalized += Math.abs(tx.amount);
-      } else if (tx.type === 'spend') {
-        spent += Math.abs(tx.amount);
+    filteredItems.forEach((item) => {
+      if (item.sourceType !== 'transaction') return;
+      if (item.type === 'chore') {
+        earned += Math.max(0, item.amount);
+      } else if (item.type === 'penalty') {
+        penalized += Math.abs(item.amount);
+      } else if (item.type === 'spend') {
+        spent += Math.abs(item.amount);
       }
     });
 
     return { earned, penalized, spent };
-  }, [filteredTransactions]);
+  }, [filteredItems]);
 
-  const handleItemClick = (tx: Transaction) => {
-    setSelectedTx(tx);
+  const handleItemClick = (item: HistoryDisplayItem) => {
+    setSelectedItem(item);
     setIsEditing(false);
     setShowDeleteConfirm(false);
     setEditError('');
     setDeleteError('');
-    if (onSelectTransaction) {
-      onSelectTransaction(tx);
+    if (onSelectTransaction && item.originalTransaction) {
+      onSelectTransaction(item.originalTransaction);
     }
   };
 
   const startEdit = () => {
-    if (!selectedTx) return;
-    setEditTitle(selectedTx.title);
-    setEditAmount(selectedTx.amount);
-    setEditDate(selectedTx.date);
-    setEditNote(selectedTx.note || '');
+    if (!selectedItem) return;
+    setEditTitle(selectedItem.title);
+    setEditAmount(selectedItem.amount);
+    setEditDate(selectedItem.date);
+    // requestの場合はオリジナルのcommentを編集フォームにセット
+    if (selectedItem.sourceType === 'request' && selectedItem.originalRequest) {
+      setEditNote(selectedItem.originalRequest.comment || '');
+    } else {
+      setEditNote(selectedItem.note || '');
+    }
     setEditError('');
     setIsEditing(true);
   };
@@ -134,7 +205,7 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
 
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTx || isSavingEdit) return;
+    if (!selectedItem || isSavingEdit) return;
     setEditError('');
 
     if (!editTitle.trim()) {
@@ -148,49 +219,88 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
 
     setIsSavingEdit(true);
     try {
-      const updatedTx: Transaction = {
-        ...selectedTx,
-        title: editTitle.trim(),
-        amount: Math.floor(Number(editAmount)),
-        date: editDate,
-        note: editNote.trim(),
-      };
-      const res = await updateTransaction(updatedTx);
-      if (!res.success) {
-        setEditError(res.error || '履歴の更新に失敗しました。');
-        return;
+      if (selectedItem.sourceType === 'request' && selectedItem.originalRequest) {
+        // お手伝い申請（未承認またはやり直し）の修正
+        const updatedReq: ChoreRequest = {
+          ...selectedItem.originalRequest,
+          title: editTitle.trim(),
+          reward: Math.max(0, Math.floor(Number(editAmount))),
+          comment: editNote.trim(),
+          requestedAt: editDate ? `${editDate}T12:00:00.000Z` : selectedItem.originalRequest.requestedAt,
+        };
+        const res = await updateChoreRequest(updatedReq);
+        if (!res.success) {
+          setEditError(res.error || '申請の更新に失敗しました。');
+          return;
+        }
+        setSelectedItem({
+          ...selectedItem,
+          title: updatedReq.title,
+          amount: updatedReq.reward,
+          date: editDate,
+          note: updatedReq.status === 'rejected' && updatedReq.parentComment ? `【やり直し理由】${updatedReq.parentComment}` : updatedReq.comment,
+          originalRequest: updatedReq,
+        });
+        setIsEditing(false);
+      } else if (selectedItem.originalTransaction) {
+        // 通常の確定済み履歴の修正
+        const updatedTx: Transaction = {
+          ...selectedItem.originalTransaction,
+          title: editTitle.trim(),
+          amount: Math.floor(Number(editAmount)),
+          date: editDate,
+          note: editNote.trim(),
+        };
+        const res = await updateTransaction(updatedTx);
+        if (!res.success) {
+          setEditError(res.error || '履歴の更新に失敗しました。');
+          return;
+        }
+        setSelectedItem({
+          ...selectedItem,
+          title: updatedTx.title,
+          amount: updatedTx.amount,
+          date: updatedTx.date,
+          note: updatedTx.note,
+          originalTransaction: updatedTx,
+        });
+        setIsEditing(false);
       }
-      setSelectedTx(updatedTx);
-      setIsEditing(false);
     } catch (err) {
-      console.error('履歴更新エラー:', err);
-      setEditError('履歴の更新中にエラーが発生しました。');
+      console.error('更新エラー:', err);
+      setEditError('更新中にエラーが発生しました。');
     } finally {
       setIsSavingEdit(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!selectedTx || isDeleting) return;
+    if (!selectedItem || isDeleting) return;
     setDeleteError('');
     setIsDeleting(true);
     try {
-      const res = await deleteTransaction(selectedTx.id);
-      if (!res.success) {
-        setDeleteError(res.error || '履歴の削除に失敗しました。');
-        return;
+      if (selectedItem.sourceType === 'request') {
+        const res = await deleteChoreRequest(selectedItem.id);
+        if (!res.success) {
+          setDeleteError(res.error || '申請の削除に失敗しました。');
+          return;
+        }
+      } else {
+        const res = await deleteTransaction(selectedItem.id);
+        if (!res.success) {
+          setDeleteError(res.error || '履歴の削除に失敗しました。');
+          return;
+        }
       }
       setShowDeleteConfirm(false);
-      setSelectedTx(null);
+      setSelectedItem(null);
     } catch (err) {
-      console.error('履歴削除エラー:', err);
-      setDeleteError('履歴の削除中にエラーが発生しました。');
+      console.error('削除エラー:', err);
+      setDeleteError('削除中にエラーが発生しました。');
     } finally {
       setIsDeleting(false);
     }
   };
-
-  const isParent = variant === 'parent';
 
   return (
     <div className="space-y-4">
@@ -267,7 +377,7 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
           </div>
         </div>
 
-        {/* カテゴリフィルター（お手伝い・いつもやること / 減額 / 出金） */}
+        {/* カテゴリフィルター（お手伝い・いつもやること / 減額 / 出金 / 申請中 / やり直し） */}
         <div>
           <label className="block text-[11px] font-bold text-slate-500 mb-1 flex items-center gap-1">
             <Filter className="w-3 h-3" /> 種類で絞り込み
@@ -278,6 +388,10 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
               { id: 'chore', label: 'お手伝い・いつも' },
               { id: 'penalty', label: '叱られ減額' },
               { id: 'spend', label: '出金（つかった）' },
+              ...(isParent ? [
+                { id: 'pending', label: '申請中（未承認）' },
+                { id: 'rejected', label: 'やり直し' }
+              ] : [])
             ].map((f) => (
               <button
                 key={f.id}
@@ -305,7 +419,7 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
           <span className={`px-2 py-0.5 rounded-full text-xs font-black ${
             isParent ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-800'
           }`}>
-            {filteredTransactions.length} 件
+            {filteredItems.length} 件
           </span>
         </div>
 
@@ -319,7 +433,7 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
       </div>
 
       {/* 絞り込み結果の金額サマリー */}
-      {filteredTransactions.length > 0 && (
+      {filteredItems.length > 0 && (
         <div className="grid grid-cols-3 gap-2 p-3 bg-white rounded-2xl border border-slate-100 text-center shadow-xs">
           <div>
             <span className="text-[10px] text-slate-400 font-bold block">ふえた</span>
@@ -338,52 +452,75 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
 
       {/* 検索結果リスト */}
       <div className="space-y-2">
-        {filteredTransactions.length === 0 ? (
+        {filteredItems.length === 0 ? (
           <div className="bg-white rounded-3xl p-8 text-center border border-slate-100 space-y-2">
             <Search className="w-8 h-8 text-slate-300 mx-auto" />
             <p className="text-xs font-bold text-slate-500">条件に一致する履歴が見つかりませんでした</p>
             <p className="text-[11px] text-slate-400">検索ワードや日付の範囲を変えて試してください。</p>
           </div>
         ) : (
-          filteredTransactions.map((tx) => {
-            const isRoutine = tx.title.startsWith('いつもやること');
+          filteredItems.map((item) => {
+            const isRoutine = item.title.startsWith('いつもやること');
+            const isPending = item.status === 'pending';
+            const isRejected = item.status === 'rejected';
+
             return (
               <button
-                key={tx.id}
+                key={item.id}
                 type="button"
-                onClick={() => handleItemClick(tx)}
-                className="w-full text-left p-3.5 bg-white hover:bg-slate-50 active:scale-[0.99] rounded-2xl border border-slate-100 shadow-xs transition flex items-center justify-between gap-3 group"
+                onClick={() => handleItemClick(item)}
+                className={`w-full text-left p-3.5 bg-white hover:bg-slate-50 active:scale-[0.99] rounded-2xl border shadow-xs transition flex items-center justify-between gap-3 group ${
+                  isPending
+                    ? 'border-amber-300 bg-amber-50/20'
+                    : isRejected
+                    ? 'border-rose-200 bg-rose-50/20'
+                    : 'border-slate-100'
+                }`}
               >
                 <div className="flex items-center gap-3 min-w-0">
                   <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                    tx.type === 'chore'
-                      ? isRoutine
+                    item.type === 'chore'
+                      ? isPending
+                        ? 'bg-amber-100 text-amber-600 ring-2 ring-amber-300'
+                        : isRejected
+                        ? 'bg-rose-100 text-rose-600'
+                        : isRoutine
                         ? 'bg-amber-100 text-amber-600'
                         : 'bg-emerald-100 text-emerald-600'
-                      : tx.type === 'penalty'
+                      : item.type === 'penalty'
                       ? 'bg-rose-100 text-rose-600'
                       : 'bg-blue-100 text-blue-600'
                   }`}>
-                    {tx.type === 'chore' && (isRoutine ? <Flame className="w-5 h-5" /> : <Coins className="w-5 h-5" />)}
-                    {tx.type === 'penalty' && <HeartCrack className="w-5 h-5" />}
-                    {tx.type === 'spend' && <ShoppingBag className="w-5 h-5" />}
+                    {item.type === 'chore' && (isRoutine ? <Flame className="w-5 h-5" /> : <Coins className="w-5 h-5" />)}
+                    {item.type === 'penalty' && <HeartCrack className="w-5 h-5" />}
+                    {item.type === 'spend' && <ShoppingBag className="w-5 h-5" />}
                   </div>
 
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-[10px] font-bold text-slate-400">{tx.date}</span>
-                      {tx.createdBy && (
+                      <span className="text-[10px] font-bold text-slate-400">{item.date || '日付未定'}</span>
+                      {isPending && (
+                        <span className="text-[9px] bg-amber-100 text-amber-800 border border-amber-300 px-1.5 py-0.2 rounded-md font-bold animate-pulse">
+                          確認中（未承認）
+                        </span>
+                      )}
+                      {isRejected && (
+                        <span className="text-[9px] bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.2 rounded-md font-bold">
+                          やり直し
+                        </span>
+                      )}
+                      {item.createdBy && (
                         <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded-md font-medium">
-                          {tx.createdBy.includes('@') ? tx.createdBy.split('@')[0] : tx.createdBy}
+                          {item.createdBy.includes('@') ? item.createdBy.split('@')[0] : item.createdBy}
                         </span>
                       )}
                     </div>
                     <p className="font-bold text-xs text-slate-800 truncate mt-0.5 group-hover:text-indigo-600 transition">
-                      {tx.title}
+                      {item.title}
                     </p>
-                    {tx.note && (
-                      <p className="text-[11px] text-slate-400 truncate mt-0.5">
-                        {tx.note}
+                    {item.note && (
+                      <p className={`text-[11px] truncate mt-0.5 ${isRejected ? 'text-rose-600 font-semibold' : 'text-slate-400'}`}>
+                        {item.note}
                       </p>
                     )}
                   </div>
@@ -391,9 +528,17 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
 
                 <div className="flex items-center gap-2 shrink-0">
                   <span className={`font-black text-xs ${
-                    tx.amount > 0 ? 'text-amber-600' : tx.amount < 0 ? 'text-rose-600' : 'text-slate-500'
+                    isPending
+                      ? 'text-amber-500'
+                      : isRejected
+                      ? 'text-rose-400 line-through'
+                      : item.amount > 0
+                      ? 'text-amber-600'
+                      : item.amount < 0
+                      ? 'text-rose-600'
+                      : 'text-slate-500'
                   }`}>
-                    {tx.amount > 0 ? `+${tx.amount}円` : `${tx.amount}円`}
+                    {item.amount > 0 ? `+${item.amount}円` : `${item.amount}円`}
                   </span>
                   <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-slate-500 transition" />
                 </div>
@@ -404,11 +549,11 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
       </div>
 
       {/* 履歴詳細・修正モーダル */}
-      {selectedTx && (
+      {selectedItem && (
         <div
           onClick={(e) => {
             if (e.target === e.currentTarget && !isSavingEdit && !isDeleting) {
-              setSelectedTx(null);
+              setSelectedItem(null);
               setIsEditing(false);
               setShowDeleteConfirm(false);
             }
@@ -419,24 +564,42 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
-                  selectedTx.type === 'chore'
-                    ? 'bg-amber-100 text-amber-600'
-                    : selectedTx.type === 'penalty'
+                  selectedItem.type === 'chore'
+                    ? selectedItem.status === 'rejected'
+                      ? 'bg-rose-100 text-rose-600'
+                      : 'bg-amber-100 text-amber-600'
+                    : selectedItem.type === 'penalty'
                     ? 'bg-rose-100 text-rose-600'
                     : 'bg-blue-100 text-blue-600'
                 }`}>
-                  {selectedTx.type === 'chore' && <Coins className="w-4 h-4" />}
-                  {selectedTx.type === 'penalty' && <HeartCrack className="w-4 h-4" />}
-                  {selectedTx.type === 'spend' && <ShoppingBag className="w-4 h-4" />}
+                  {selectedItem.type === 'chore' && <Coins className="w-4 h-4" />}
+                  {selectedItem.type === 'penalty' && <HeartCrack className="w-4 h-4" />}
+                  {selectedItem.type === 'spend' && <ShoppingBag className="w-4 h-4" />}
                 </div>
-                <h4 className="font-bold text-sm text-slate-800">
-                  {isEditing ? '履歴の修正' : '履歴のしょうさい'}
-                </h4>
+                <div className="flex items-center gap-1.5">
+                  <h4 className="font-bold text-sm text-slate-800">
+                    {isEditing
+                      ? selectedItem.sourceType === 'request'
+                        ? '申請の修正'
+                        : '履歴の修正'
+                      : '詳細・しょうさい'}
+                  </h4>
+                  {selectedItem.status === 'pending' && (
+                    <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full border border-amber-300">
+                      申請中（未承認）
+                    </span>
+                  )}
+                  {selectedItem.status === 'rejected' && (
+                    <span className="text-[10px] bg-rose-100 text-rose-700 font-bold px-2 py-0.5 rounded-full border border-rose-200">
+                      やり直し
+                    </span>
+                  )}
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => {
-                  setSelectedTx(null);
+                  setSelectedItem(null);
                   setIsEditing(false);
                   setShowDeleteConfirm(false);
                 }}
@@ -468,7 +631,7 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
                     value={editTitle}
                     onChange={(e) => setEditTitle(e.target.value)}
                     className="w-full px-3 py-2 border rounded-xl text-xs focus:ring-2 focus:ring-indigo-400 focus:outline-none"
-                    placeholder="例: お風呂そうじ承認"
+                    placeholder="例: お風呂そうじ"
                   />
                 </div>
 
@@ -486,7 +649,9 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
                       placeholder="0"
                     />
                     <span className="text-[10px] text-slate-400 block mt-0.5">
-                      ※プラスは加算、マイナスは減額
+                      {selectedItem.sourceType === 'request'
+                        ? '※承認予定の金額'
+                        : '※プラスは加算、マイナスは減額'}
                     </span>
                   </div>
 
@@ -541,42 +706,59 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
               <div className="space-y-3 text-xs">
                 <div>
                   <span className="text-[10px] text-slate-400 font-bold block mb-0.5">内容</span>
-                  <p className="font-extrabold text-sm text-slate-800">{selectedTx.title}</p>
+                  <p className="font-extrabold text-sm text-slate-800">{selectedItem.title}</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold block mb-0.5">金額</span>
                     <span className={`text-base font-black ${
-                      selectedTx.amount > 0 ? 'text-amber-600' : selectedTx.amount < 0 ? 'text-rose-600' : 'text-slate-600'
+                      selectedItem.status === 'pending'
+                        ? 'text-amber-500'
+                        : selectedItem.status === 'rejected'
+                        ? 'text-rose-400 line-through'
+                        : selectedItem.amount > 0
+                        ? 'text-amber-600'
+                        : selectedItem.amount < 0
+                        ? 'text-rose-600'
+                        : 'text-slate-600'
                     }`}>
-                      {selectedTx.amount > 0 ? `+${selectedTx.amount}円` : `${selectedTx.amount}円`}
+                      {selectedItem.amount > 0 ? `+${selectedItem.amount}円` : `${selectedItem.amount}円`}
                     </span>
+                    {selectedItem.sourceType === 'request' && (
+                      <span className="text-[10px] text-slate-400 block">（未反映）</span>
+                    )}
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold block mb-0.5">実施日付</span>
-                    <span className="font-bold text-slate-700">{selectedTx.date}</span>
+                    <span className="font-bold text-slate-700">{selectedItem.date || '未定'}</span>
                   </div>
                 </div>
 
-                {selectedTx.note && (
+                {selectedItem.note && (
                   <div>
-                    <span className="text-[10px] text-slate-400 font-bold block mb-0.5">メッセージ・メモ</span>
-                    <p className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-slate-700 leading-relaxed">
-                      {selectedTx.note}
+                    <span className="text-[10px] text-slate-400 font-bold block mb-0.5">
+                      {selectedItem.status === 'rejected' ? 'やり直し理由 / メモ' : 'メッセージ・メモ'}
+                    </span>
+                    <p className={`p-2.5 rounded-xl border leading-relaxed ${
+                      selectedItem.status === 'rejected'
+                        ? 'bg-rose-50 border-rose-100 text-rose-700 font-medium'
+                        : 'bg-slate-50 border-slate-100 text-slate-700'
+                    }`}>
+                      {selectedItem.note}
                     </p>
                   </div>
                 )}
 
                 <div className="space-y-1 pt-1 text-[11px] text-slate-400">
                   <div className="flex justify-between">
-                    <span>登録日時:</span>
-                    <span>{new Date(selectedTx.createdAt).toLocaleString('ja-JP')}</span>
+                    <span>{selectedItem.sourceType === 'request' ? '申請日時:' : '登録日時:'}</span>
+                    <span>{new Date(selectedItem.createdAt).toLocaleString('ja-JP')}</span>
                   </div>
-                  {selectedTx.createdBy && (
+                  {selectedItem.createdBy && (
                     <div className="flex justify-between">
-                      <span>登録・承認者:</span>
-                      <span>{selectedTx.createdBy}</span>
+                      <span>{selectedItem.sourceType === 'request' ? '申請者:' : '登録・承認者:'}</span>
+                      <span>{selectedItem.createdBy}</span>
                     </div>
                   )}
                 </div>
@@ -605,7 +787,7 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => setSelectedTx(null)}
+                  onClick={() => setSelectedItem(null)}
                   className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs hover:bg-slate-200 transition mt-1"
                 >
                   とじる
@@ -617,7 +799,7 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
       )}
 
       {/* 削除確認モーダル */}
-      {showDeleteConfirm && selectedTx && (
+      {showDeleteConfirm && selectedItem && (
         <div
           onClick={(e) => {
             if (e.target === e.currentTarget && !isDeleting) setShowDeleteConfirm(false);
@@ -639,7 +821,9 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
               <Trash2 className="w-6 h-6" />
             </div>
 
-            <h3 className="font-bold text-base text-slate-800">この履歴を削除しますか？</h3>
+            <h3 className="font-bold text-base text-slate-800">
+              {selectedItem.sourceType === 'request' ? 'この申請を削除しますか？' : 'この履歴を削除しますか？'}
+            </h3>
 
             {deleteError && (
               <div className="p-2 bg-rose-50 text-rose-600 text-[11px] rounded-lg">
@@ -648,15 +832,17 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
             )}
 
             <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 text-left text-xs space-y-1">
-              <p className="font-bold text-slate-800 truncate">{selectedTx.title}</p>
-              <p className="text-slate-500">{selectedTx.date}</p>
-              <p className={`font-black ${selectedTx.amount > 0 ? 'text-amber-600' : 'text-rose-600'}`}>
-                {selectedTx.amount > 0 ? `+${selectedTx.amount}円` : `${selectedTx.amount}円`}
+              <p className="font-bold text-slate-800 truncate">{selectedItem.title}</p>
+              <p className="text-slate-500">{selectedItem.date || '日付未定'}</p>
+              <p className={`font-black ${selectedItem.amount > 0 ? 'text-amber-600' : 'text-rose-600'}`}>
+                {selectedItem.amount > 0 ? `+${selectedItem.amount}円` : `${selectedItem.amount}円`}
               </p>
             </div>
 
             <p className="text-[11px] text-slate-500 leading-relaxed">
-              削除すると、この履歴分の金額（{selectedTx.amount > 0 ? `+${selectedTx.amount}円` : `${selectedTx.amount}円`}）が残高に自動反映されます。元に戻すことはできません。
+              {selectedItem.sourceType === 'request'
+                ? '申請を削除します（まだ承認されていないため残高には影響しません）。'
+                : `削除すると、この履歴分の金額（${selectedItem.amount > 0 ? `+${selectedItem.amount}円` : `${selectedItem.amount}円`}）が残高に自動反映されます。元に戻すことはできません。`}
             </p>
 
             <div className="flex gap-2 pt-2">

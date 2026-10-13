@@ -9,7 +9,7 @@ import {
   type FirebaseCustomConfig
 } from '../lib/firebase';
 import type { ChoreMaster, RoutineTask, RoutineLog, ScheduleType, Transaction } from '../types';
-import { formatScheduleDescription } from '../utils/scheduleUtils';
+import { formatScheduleDescription, isTaskScheduledForDate } from '../utils/scheduleUtils';
 import {
   Check,
   X,
@@ -199,6 +199,20 @@ export const ParentDashboard: React.FC = () => {
   const isGoalReached = household.balance >= household.goalAmount && household.goalAmount > 0;
   const pendingRequests = requests.filter((r) => r.status === 'pending');
   const pendingRoutineLogs = routineLogs.filter((l) => l.status === 'pending');
+
+  // 本日の「いつもやること」未実施（未完了・未報告）の抽出
+  const todayObj = new Date();
+  const yStr = todayObj.getFullYear();
+  const mStr = String(todayObj.getMonth() + 1).padStart(2, '0');
+  const dStr = String(todayObj.getDate()).padStart(2, '0');
+  const todayDateStr = `${yStr}-${mStr}-${dStr}`;
+
+  const todayScheduledRoutines = routines.filter((r) => isTaskScheduledForDate(r, todayObj));
+  // 未実施 = 今日の日付でログが存在しない、または open 状態（未報告・未完了）
+  const uncompletedRoutines = todayScheduledRoutines.filter((routine) => {
+    const log = routineLogs.find((l) => l.id === `${routine.id}_${todayDateStr}`);
+    return !log || log.status === 'open';
+  });
 
   const approvingReq = requests.find((r) => r.id === approvingId);
 
@@ -1063,6 +1077,59 @@ export const ParentDashboard: React.FC = () => {
                           <Check className="w-3.5 h-3.5" /> 承認する
                         </button>
                       </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* ルーティン（いつもやること）の未実施一覧 */}
+            <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5 text-amber-700">
+                  <Clock className="w-4 h-4 text-amber-600" />
+                  本日のいつもやること（未実施: {uncompletedRoutines.length}件）
+                </h3>
+                <span className="text-[10px] bg-amber-50 text-amber-700 font-bold px-2 py-0.5 rounded-full border border-amber-200">
+                  今日対象: {todayScheduledRoutines.length}件
+                </span>
+              </div>
+
+              {uncompletedRoutines.length === 0 ? (
+                <div className="py-4 text-center bg-slate-50/70 rounded-2xl border border-dashed border-slate-200">
+                  <p className="text-xs text-slate-500 font-bold">🎉 本日のいつもやることはすべて報告済みまたは完了しています！</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">未実施のタスクはありません。</p>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {uncompletedRoutines.map((routine) => (
+                    <div
+                      key={routine.id}
+                      className="p-3.5 rounded-2xl bg-amber-50/50 border border-amber-100/80 flex items-center justify-between gap-3"
+                    >
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-bold text-slate-800 text-xs">{routine.title}</span>
+                          <span className="text-[10px] bg-amber-100 text-amber-800 font-semibold px-2 py-0.2 rounded-md">
+                            未実施
+                          </span>
+                        </div>
+                        <div className="text-[11px] mt-1 text-slate-500 flex items-center gap-2 flex-wrap">
+                          {routine.reward > 0 ? (
+                            <span className="text-emerald-700 font-bold">ご褒美: +{routine.reward}円</span>
+                          ) : (
+                            <span className="text-slate-400">ご褒美なし</span>
+                          )}
+                          {routine.penaltyAmount > 0 && (
+                            <span className="text-rose-600 font-bold">未達成ペナルティ: -{routine.penaltyAmount}円</span>
+                          )}
+                          <span className="text-slate-400">
+                            {routine.graceDays > 0 ? `猶予: あと${routine.graceDays}日` : '当日中'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-[11px] font-bold text-amber-700 bg-amber-100/80 px-2.5 py-1 rounded-xl shrink-0">
+                        子ども報告待ち
+                      </span>
                     </div>
                   ))}
                 </div>
