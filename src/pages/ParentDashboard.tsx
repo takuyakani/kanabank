@@ -39,7 +39,8 @@ import {
   Copy,
   CheckCheck,
   Upload,
-  Undo2
+  Undo2,
+  CheckCircle2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -215,6 +216,18 @@ export const ParentDashboard: React.FC = () => {
     const log = routineLogs.find((l) => l.id === `${routine.id}_${todayDateStr}`);
     return !log || log.status === 'open';
   });
+
+  // 本日の各ルーティンのステータス（未実施・確認中・承認済み・ペナルティ）付き一覧
+  const todayRoutinesWithStatus = todayScheduledRoutines.map((routine) => {
+    const log = routineLogs.find((l) => l.id === `${routine.id}_${todayDateStr}`);
+    const status = log ? log.status : 'open';
+    return {
+      routine,
+      log,
+      status, // 'open' | 'pending' | 'completed' | 'penalized'
+    };
+  });
+  const completedRoutinesCount = todayRoutinesWithStatus.filter((item) => item.status === 'completed').length;
 
   const approvingReq = requests.find((r) => r.id === approvingId);
 
@@ -1114,56 +1127,125 @@ export const ParentDashboard: React.FC = () => {
                 </div>
               )}
             </div>
-            {/* ルーティン（いつもやること）の未実施一覧 */}
+            {/* ルーティン（いつもやること）の本日の実施状況一覧 */}
             <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5 text-amber-700">
-                  <Clock className="w-4 h-4 text-amber-600" />
-                  本日のいつもやること（未実施: {uncompletedRoutines.length}件）
+                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5 text-indigo-800">
+                  <Clock className="w-4 h-4 text-indigo-600" />
+                  本日のいつもやること状況
                 </h3>
-                <span className="text-[10px] bg-amber-50 text-amber-700 font-bold px-2 py-0.5 rounded-full border border-amber-200">
-                  今日対象: {todayScheduledRoutines.length}件
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded-full border border-emerald-200">
+                    完了: {completedRoutinesCount}/{todayScheduledRoutines.length}件
+                  </span>
+                  {uncompletedRoutines.length > 0 && (
+                    <span className="text-[10px] bg-amber-50 text-amber-700 font-bold px-2 py-0.5 rounded-full border border-amber-200">
+                      未実施: {uncompletedRoutines.length}件
+                    </span>
+                  )}
+                </div>
               </div>
 
-              {uncompletedRoutines.length === 0 ? (
+              {todayScheduledRoutines.length === 0 ? (
                 <div className="py-4 text-center bg-slate-50/70 rounded-2xl border border-dashed border-slate-200">
-                  <p className="text-xs text-slate-500 font-bold">🎉 本日のいつもやることはすべて報告済みまたは完了しています！</p>
-                  <p className="text-[10px] text-slate-400 mt-0.5">未実施のタスクはありません。</p>
+                  <p className="text-xs text-slate-500 font-bold">本日予定されている「いつもやること」はありません</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">「いつも」タブからタスクを追加・編集できます。</p>
                 </div>
               ) : (
                 <div className="space-y-2.5">
-                  {uncompletedRoutines.map((routine) => (
-                    <div
-                      key={routine.id}
-                      className="p-3.5 rounded-2xl bg-amber-50/50 border border-amber-100/80 flex items-center justify-between gap-3"
-                    >
-                      <div>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-bold text-slate-800 text-xs">{routine.title}</span>
-                          <span className="text-[10px] bg-amber-100 text-amber-800 font-semibold px-2 py-0.2 rounded-md">
-                            未実施
-                          </span>
+                  {todayRoutinesWithStatus.map(({ routine, log, status }) => {
+                    const isApproved = status === 'completed';
+                    const isPending = status === 'pending';
+                    const isPenalized = status === 'penalized';
+                    const isOpen = status === 'open';
+
+                    return (
+                      <div
+                        key={routine.id}
+                        className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 transition ${
+                          isApproved
+                            ? 'bg-emerald-50/50 border-emerald-200/80'
+                            : isPending
+                            ? 'bg-amber-50/60 border-amber-200'
+                            : isPenalized
+                            ? 'bg-rose-50/50 border-rose-200'
+                            : 'bg-slate-50/70 border-slate-200/80'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-slate-800 text-xs">{routine.title}</span>
+                            {isApproved && (
+                              <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.2 rounded-md flex items-center gap-0.5">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                承認完了
+                              </span>
+                            )}
+                            {isPending && (
+                              <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.2 rounded-md flex items-center gap-0.5 animate-pulse">
+                                <Clock className="w-3 h-3 text-amber-600" />
+                                報告あり・承認待ち
+                              </span>
+                            )}
+                            {isPenalized && (
+                              <span className="text-[10px] bg-rose-100 text-rose-800 font-bold px-2 py-0.2 rounded-md">
+                                未達成ペナルティ適用済
+                              </span>
+                            )}
+                            {isOpen && (
+                              <span className="text-[10px] bg-slate-200/70 text-slate-600 font-semibold px-2 py-0.2 rounded-md">
+                                未実施
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] mt-1 text-slate-500 flex items-center gap-2 flex-wrap">
+                            {routine.reward > 0 ? (
+                              <span className="text-emerald-700 font-bold">ご褒美: +{routine.reward}円</span>
+                            ) : (
+                              <span className="text-slate-400">ご褒美なし</span>
+                            )}
+                            {routine.penaltyAmount > 0 && (
+                              <span className="text-rose-600 font-bold">未達成ペナルティ: -{routine.penaltyAmount}円</span>
+                            )}
+                            {isApproved && log?.approvedAt && (
+                              <span className="text-slate-400 text-[10px]">
+                                承認時刻: {new Date(log.approvedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            )}
+                            {isOpen && (
+                              <span className="text-slate-400">
+                                {routine.graceDays > 0 ? `猶予: あと${routine.graceDays}日` : '当日中'}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-[11px] mt-1 text-slate-500 flex items-center gap-2 flex-wrap">
-                          {routine.reward > 0 ? (
-                            <span className="text-emerald-700 font-bold">ご褒美: +{routine.reward}円</span>
-                          ) : (
-                            <span className="text-slate-400">ご褒美なし</span>
+
+                        <div className="shrink-0">
+                          {isApproved && (
+                            <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100/80 px-2.5 py-1 rounded-xl inline-flex items-center gap-1 shadow-2xs">
+                              <Check className="w-3.5 h-3.5" />
+                              達成済み
+                            </span>
                           )}
-                          {routine.penaltyAmount > 0 && (
-                            <span className="text-rose-600 font-bold">未達成ペナルティ: -{routine.penaltyAmount}円</span>
+                          {isPending && (
+                            <span className="text-[11px] font-bold text-amber-700 bg-amber-100/90 px-2.5 py-1 rounded-xl">
+                              上の枠で承認可
+                            </span>
                           )}
-                          <span className="text-slate-400">
-                            {routine.graceDays > 0 ? `猶予: あと${routine.graceDays}日` : '当日中'}
-                          </span>
+                          {isPenalized && (
+                            <span className="text-[11px] font-bold text-rose-600 bg-rose-100 px-2.5 py-1 rounded-xl">
+                              期限切れ
+                            </span>
+                          )}
+                          {isOpen && (
+                            <span className="text-[11px] font-bold text-slate-500 bg-slate-200/60 px-2.5 py-1 rounded-xl">
+                              子ども報告待ち
+                            </span>
+                          )}
                         </div>
                       </div>
-                      <span className="text-[11px] font-bold text-amber-700 bg-amber-100/80 px-2.5 py-1 rounded-xl shrink-0">
-                        子ども報告待ち
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
