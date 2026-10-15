@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import type { Transaction } from '../types';
 import { useApp } from '../context/AppContext';
 import { isTaskScheduledForDate } from '../utils/scheduleUtils';
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Coins, HeartCrack, ShoppingBag, Sparkles, Flame } from 'lucide-react';
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Coins, HeartCrack, ShoppingBag, Sparkles, Flame, CheckCircle2 } from 'lucide-react';
 
 interface CalendarViewProps {
   transactions: Transaction[];
@@ -11,7 +11,11 @@ interface CalendarViewProps {
 export const CalendarView: React.FC<CalendarViewProps> = ({ transactions }) => {
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [selectedDateStr, setSelectedDateStr] = useState<string>(() => {
-    return new Date().toISOString().split('T')[0];
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
   });
 
   const year = currentDate.getFullYear();
@@ -65,8 +69,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ transactions }) => {
 
   const { routines, routineLogs } = useApp();
 
-  // 今日の日付文字列
-  const todayStr = new Date().toISOString().split('T')[0];
+  // 今日の日付文字列（ローカルタイム基準）
+  const todayStr = React.useMemo(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }, []);
 
   // 選択日が今日の場合、本日のルーティンのうちまだtransactionになっていないもの（未実施 open、確認中 pending など）を抽出
   const todayRoutinesForSelectedDay = React.useMemo(() => {
@@ -222,57 +232,84 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ transactions }) => {
           </div>
         ) : (
           <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-            {/* 本日のいつもやること状況（未確定分） */}
-            {todayRoutinesForSelectedDay.map((r) => (
-              <div
-                key={r.id}
-                className={`flex items-center justify-between p-2.5 rounded-xl border text-xs ${
-                  r.status === 'pending'
-                    ? 'bg-amber-50/70 border-amber-200'
-                    : r.status === 'open'
-                    ? 'bg-slate-50/70 border-slate-200'
-                    : 'bg-rose-50/70 border-rose-200'
-                }`}
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <Flame className={`w-4 h-4 shrink-0 ${
-                    r.status === 'pending' ? 'text-amber-500' : 'text-slate-400'
-                  }`} />
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <p className="font-bold text-slate-800 truncate">{r.title}</p>
-                      {r.status === 'pending' && (
-                        <span className="text-[9px] bg-amber-100 text-amber-800 border border-amber-300 px-1.5 py-0.2 rounded-md font-bold animate-pulse">
-                          確認中（未承認）
-                        </span>
-                      )}
-                      {r.status === 'open' && (
-                        <span className="text-[9px] bg-slate-200/80 text-slate-600 border border-slate-300 px-1.5 py-0.2 rounded-md font-bold">
-                          未実施
-                        </span>
-                      )}
-                      {r.status === 'penalized' && (
-                        <span className="text-[9px] bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.2 rounded-md font-bold">
-                          期限超過
-                        </span>
-                      )}
+            {/* 本日のいつもやること状況（未確定分・承認済み分） */}
+            {todayRoutinesForSelectedDay.map((r) => {
+              const isApproved = r.status === 'completed';
+              const isPending = r.status === 'pending';
+              const isOpen = r.status === 'open';
+              const isPenalized = r.status === 'penalized';
+
+              return (
+                <div
+                  key={r.id}
+                  className={`flex items-center justify-between p-2.5 rounded-xl border text-xs ${
+                    isApproved
+                      ? 'bg-emerald-50/70 border-emerald-200'
+                      : isPending
+                      ? 'bg-amber-50/70 border-amber-200'
+                      : isOpen
+                      ? 'bg-slate-50/70 border-slate-200'
+                      : 'bg-rose-50/70 border-rose-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Flame className={`w-4 h-4 shrink-0 ${
+                      isApproved
+                        ? 'text-emerald-500'
+                        : isPending
+                        ? 'text-amber-500'
+                        : isOpen
+                        ? 'text-slate-400'
+                        : 'text-rose-500'
+                    }`} />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="font-bold text-slate-800 truncate">{r.title}</p>
+                        {isApproved && (
+                          <span className="text-[9px] bg-emerald-100 text-emerald-800 border border-emerald-300 px-1.5 py-0.2 rounded-md font-bold flex items-center gap-0.5">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            承認完了
+                          </span>
+                        )}
+                        {isPending && (
+                          <span className="text-[9px] bg-amber-100 text-amber-800 border border-amber-300 px-1.5 py-0.2 rounded-md font-bold animate-pulse">
+                            確認中（未承認）
+                          </span>
+                        )}
+                        {isOpen && (
+                          <span className="text-[9px] bg-slate-200/80 text-slate-600 border border-slate-300 px-1.5 py-0.2 rounded-md font-bold">
+                            未実施
+                          </span>
+                        )}
+                        {isPenalized && (
+                          <span className="text-[9px] bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.2 rounded-md font-bold">
+                            期限超過
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-slate-400 text-[10px]">
+                        {isApproved
+                          ? '達成済み・承認完了'
+                          : isPending
+                          ? '子どもから「おわったよ！」報告あり'
+                          : isOpen
+                          ? '子どもの実施・報告待ち'
+                          : '期限切れ'}
+                      </p>
                     </div>
-                    <p className="text-slate-400 text-[10px]">
-                      {r.status === 'pending'
-                        ? '子どもから「おわったよ！」報告あり'
-                        : r.status === 'open'
-                        ? '子どもの実施・報告待ち'
-                        : '期限切れ'}
-                    </p>
                   </div>
+                  <span className={`font-black shrink-0 ${
+                    isApproved
+                      ? 'text-emerald-600'
+                      : isPending
+                      ? 'text-amber-500'
+                      : 'text-slate-400'
+                  }`}>
+                    +{r.reward}円
+                  </span>
                 </div>
-                <span className={`font-black shrink-0 ${
-                  r.status === 'pending' ? 'text-amber-500' : 'text-slate-400'
-                }`}>
-                  +{r.reward}円
-                </span>
-              </div>
-            ))}
+              );
+            })}
 
             {/* 確定済みトランザクション */}
             {selectedTxs.map((tx) => (
