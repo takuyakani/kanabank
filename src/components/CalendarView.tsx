@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import type { Transaction } from '../types';
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Coins, HeartCrack, ShoppingBag, Sparkles } from 'lucide-react';
+import { useApp } from '../context/AppContext';
+import { isTaskScheduledForDate } from '../utils/scheduleUtils';
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Coins, HeartCrack, ShoppingBag, Sparkles, Flame } from 'lucide-react';
 
 interface CalendarViewProps {
   transactions: Transaction[];
@@ -61,7 +63,47 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ transactions }) => {
     days.push(d);
   }
 
+  const { routines, routineLogs } = useApp();
+
+  // 今日の日付文字列
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  // 選択日が今日の場合、本日のルーティンのうちまだtransactionになっていないもの（未実施 open、確認中 pending など）を抽出
+  const todayRoutinesForSelectedDay = React.useMemo(() => {
+    if (selectedDateStr !== todayStr || !routines || routines.length === 0) return [];
+    const todayObj = new Date();
+    const scheduled = routines.filter((r) => isTaskScheduledForDate(r, todayObj));
+
+    return scheduled
+      .map((routine) => {
+        const log = routineLogs.find((l) => l.id === `${routine.id}_${todayStr}`);
+        const status = log ? log.status : 'open';
+
+        // 既に承認完了（completed）でtransactionsに存在するものはtransactions側で表示されるため除外
+        const alreadyInTxs = transactions.some(
+          (tx) => tx.date === todayStr && tx.title.includes(routine.title)
+        );
+        if (status === 'completed' && alreadyInTxs) return null;
+
+        return {
+          id: `routine-cal-${routine.id}`,
+          title: `いつもやること: ${routine.title}`,
+          reward: routine.reward,
+          status, // 'open' | 'pending' | 'completed' | 'penalized'
+          reportedAt: log?.reportedAt,
+        };
+      })
+      .filter(Boolean) as Array<{
+        id: string;
+        title: string;
+        reward: number;
+        status: 'open' | 'pending' | 'completed' | 'penalized';
+        reportedAt?: string;
+      }>;
+  }, [selectedDateStr, todayStr, routines, routineLogs, transactions]);
+
   const selectedTxs = txByDate[selectedDateStr] || [];
+  const totalItemsCount = selectedTxs.length + todayRoutinesForSelectedDay.length;
 
   return (
     <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
@@ -163,10 +205,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ transactions }) => {
           <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5">
             <CalendarIcon className="w-4 h-4 text-amber-500" />
             <span>{selectedDateStr} のできごと</span>
-            <span className="text-[10px] text-slate-400 font-normal">({selectedTxs.length}件)</span>
+            <span className="text-[10px] text-slate-400 font-normal">({totalItemsCount}件)</span>
           </h4>
 
-          {selectedTxs.some((t) => t.type === 'chore') && (
+          {(selectedTxs.some((t) => t.type === 'chore') || todayRoutinesForSelectedDay.some((r) => r.status === 'completed')) && (
             <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full border border-amber-200">
               <Sparkles className="w-3 h-3 text-amber-600" />
               がんばったスタンプ！
@@ -174,31 +216,84 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ transactions }) => {
           )}
         </div>
 
-        {selectedTxs.length === 0 ? (
+        {totalItemsCount === 0 ? (
           <div className="py-4 text-center text-slate-400 text-xs">
             この日はきろくがありません
           </div>
         ) : (
           <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+            {/* 本日のいつもやること状況（未確定分） */}
+            {todayRoutinesForSelectedDay.map((r) => (
+              <div
+                key={r.id}
+                className={`flex items-center justify-between p-2.5 rounded-xl border text-xs ${
+                  r.status === 'pending'
+                    ? 'bg-amber-50/70 border-amber-200'
+                    : r.status === 'open'
+                    ? 'bg-slate-50/70 border-slate-200'
+                    : 'bg-rose-50/70 border-rose-200'
+                }`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <Flame className={`w-4 h-4 shrink-0 ${
+                    r.status === 'pending' ? 'text-amber-500' : 'text-slate-400'
+                  }`} />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <p className="font-bold text-slate-800 truncate">{r.title}</p>
+                      {r.status === 'pending' && (
+                        <span className="text-[9px] bg-amber-100 text-amber-800 border border-amber-300 px-1.5 py-0.2 rounded-md font-bold animate-pulse">
+                          確認中（未承認）
+                        </span>
+                      )}
+                      {r.status === 'open' && (
+                        <span className="text-[9px] bg-slate-200/80 text-slate-600 border border-slate-300 px-1.5 py-0.2 rounded-md font-bold">
+                          未実施
+                        </span>
+                      )}
+                      {r.status === 'penalized' && (
+                        <span className="text-[9px] bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.2 rounded-md font-bold">
+                          期限超過
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-slate-400 text-[10px]">
+                      {r.status === 'pending'
+                        ? '子どもから「おわったよ！」報告あり'
+                        : r.status === 'open'
+                        ? '子どもの実施・報告待ち'
+                        : '期限切れ'}
+                    </p>
+                  </div>
+                </div>
+                <span className={`font-black shrink-0 ${
+                  r.status === 'pending' ? 'text-amber-500' : 'text-slate-400'
+                }`}>
+                  +{r.reward}円
+                </span>
+              </div>
+            ))}
+
+            {/* 確定済みトランザクション */}
             {selectedTxs.map((tx) => (
               <div
                 key={tx.id}
                 className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs"
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 min-w-0">
                   {tx.type === 'chore' && <Coins className="w-4 h-4 text-amber-500 shrink-0" />}
                   {tx.type === 'penalty' && <HeartCrack className="w-4 h-4 text-rose-500 shrink-0" />}
                   {tx.type === 'spend' && <ShoppingBag className="w-4 h-4 text-blue-500 shrink-0" />}
-                  <div>
+                  <div className="min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <p className="font-bold text-slate-800">{tx.title}</p>
+                      <p className="font-bold text-slate-800 truncate">{tx.title}</p>
                       {tx.createdBy && (
                         <span className="text-[9px] bg-indigo-50 text-indigo-700 px-1.5 py-0.2 rounded-full font-medium">
                           {tx.createdBy.includes('@') ? tx.createdBy.split('@')[0] : tx.createdBy}
                         </span>
                       )}
                     </div>
-                    {tx.note && <p className="text-slate-400 text-[10px]">{tx.note}</p>}
+                    {tx.note && <p className="text-slate-400 text-[10px] truncate">{tx.note}</p>}
                   </div>
                 </div>
                 <span

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
-import type { Transaction, ChoreRequest } from '../types';
+import type { Transaction, ChoreRequest, RoutineTask, RoutineLog } from '../types';
 import { useApp } from '../context/AppContext';
+import { isTaskScheduledForDate } from '../utils/scheduleUtils';
 import {
   Search,
   Calendar,
@@ -24,20 +25,22 @@ interface HistorySearchViewProps {
   variant?: 'child' | 'parent';
 }
 
-// 履歴と申請を統合した表示用アイテムの定義
+// 履歴と申請・いつもやることを統合した表示用アイテムの定義
 export interface HistoryDisplayItem {
   id: string;
-  sourceType: 'transaction' | 'request';
+  sourceType: 'transaction' | 'request' | 'routine';
   title: string;
   amount: number;
   date: string; // YYYY-MM-DD
   type: 'chore' | 'penalty' | 'spend';
-  status?: 'pending' | 'rejected' | 'approved';
+  status?: 'pending' | 'rejected' | 'approved' | 'open' | 'penalized';
   note?: string;
   createdBy?: string;
   createdAt: string; // ISO string
   originalTransaction?: Transaction;
   originalRequest?: ChoreRequest;
+  originalRoutine?: RoutineTask;
+  originalRoutineLog?: RoutineLog;
 }
 
 export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
@@ -45,11 +48,11 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
   onSelectTransaction,
   variant = 'parent',
 }) => {
-  const { updateTransaction, deleteTransaction, requests, updateChoreRequest, deleteChoreRequest } = useApp();
+  const { updateTransaction, deleteTransaction, requests, updateChoreRequest, deleteChoreRequest, routines, routineLogs } = useApp();
   const [keyword, setKeyword] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'chore' | 'penalty' | 'spend' | 'pending' | 'rejected'>('all');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'chore' | 'penalty' | 'spend' | 'pending' | 'rejected' | 'open'>('all');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
   const [selectedItem, setSelectedItem] = useState<HistoryDisplayItem | null>(null);
 
@@ -68,6 +71,15 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
   const [deleteError, setDeleteError] = useState('');
 
   const isParent = variant === 'parent';
+
+  // 本日の日付文字列
+  const todayDateStr = useMemo(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }, []);
 
   // 全履歴アイテムの統合
   const allItems = useMemo<HistoryDisplayItem[]>(() => {
@@ -109,8 +121,55 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
         });
     }
 
-    return [...txItems, ...reqItems];
-  }, [transactions, requests, isParent]);
+    // 今日の「いつもやること」を状況と共に履歴に統合
+    let routineItems: HistoryDisplayItem[] = [];
+    if (routines && routines.length > 0) {
+      const todayObj = new Date();
+      const scheduledRoutines = routines.filter((r) => isTaskScheduledForDate(r, todayObj));
+
+      scheduledRoutines.forEach((routine) => {
+        const log = routineLogs.find((l) => l.id === `${routine.id}_${todayDateStr}`);
+        const status = log ? log.status : 'open';
+
+        // 既に承認完了（completed）している場合、transactionsに「いつもやること達成: ...」として記録されているか確認
+        // 記録されている場合はtransactions側で表示されるため、二重表示を防ぐ（ただしtransactionがない場合は追加）
+        const alreadyInTransactions = transactions.some(
+          (tx) => tx.date === todayDateStr && tx.title.includes(routine.title)
+        );
+
+        if (status === 'completed' && alreadyInTransactions) {
+          return;
+        }
+
+        // 未実施（open）、報告済み承認待ち（pending）、またはペナルティ（penalized）
+        const note =
+          status === 'pending'
+            ? '子どもから「おわったよ！」報告あり（承認待ち）'
+            : status === 'open'
+            ? '子ども未実施・報告待ち'
+            : status === 'penalized'
+            ? '期限超過ペナルティ'
+            : '承認済み';
+
+        routineItems.push({
+          id: `routine-today-${routine.id}`,
+          sourceType: 'routine',
+          title: `いつもやること: ${routine.title}`,
+          amount: routine.reward,
+          date: todayDateStr,
+          type: 'chore',
+          status: status as any,
+          note,
+          createdBy: status === 'pending' ? '子ども' : status === 'completed' ? (log?.approvedBy || '保護者') : 'システム',
+          createdAt: log?.reportedAt || log?.approvedAt || new Date().toISOString(),
+          originalRoutine: routine,
+          originalRoutineLog: log,
+        });
+      });
+    }
+
+    return [...txItems, ...reqItems, ...routineItems];
+  }, [transactions, requests, routines, routineLogs, isParent, todayDateStr]);
 
   // フィルタリング処理
   const filteredItems = useMemo(() => {
@@ -130,6 +189,8 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
           if (item.status !== 'pending') return false;
         } else if (typeFilter === 'rejected') {
           if (item.status !== 'rejected') return false;
+        } else if (typeFilter === 'open') {
+          if (item.status !== 'open') return false;
         } else if (typeFilter === 'chore') {
           // お手伝い または いつもやること
           if (item.type !== 'chore') return false;
@@ -389,8 +450,9 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
               { id: 'penalty', label: '叱られ減額' },
               { id: 'spend', label: '出金（つかった）' },
               ...(isParent ? [
-                { id: 'pending', label: '申請中（未承認）' },
-                { id: 'rejected', label: 'やり直し' }
+                { id: 'pending', label: '確認中（未承認）' },
+                { id: 'rejected', label: 'やり直し' },
+                { id: 'open', label: '今日のいつも（未実施）' }
               ] : [])
             ].map((f) => (
               <button
@@ -463,6 +525,8 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
             const isRoutine = item.title.startsWith('いつもやること');
             const isPending = item.status === 'pending';
             const isRejected = item.status === 'rejected';
+            const isOpen = item.status === 'open';
+            const isPenalized = item.status === 'penalized';
 
             return (
               <button
@@ -474,6 +538,10 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
                     ? 'border-amber-300 bg-amber-50/20'
                     : isRejected
                     ? 'border-rose-200 bg-rose-50/20'
+                    : isOpen
+                    ? 'border-slate-200 bg-slate-50/50'
+                    : isPenalized
+                    ? 'border-rose-200 bg-rose-50/20'
                     : 'border-slate-100'
                 }`}
               >
@@ -483,6 +551,10 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
                       ? isPending
                         ? 'bg-amber-100 text-amber-600 ring-2 ring-amber-300'
                         : isRejected
+                        ? 'bg-rose-100 text-rose-600'
+                        : isOpen
+                        ? 'bg-slate-100 text-slate-500'
+                        : isPenalized
                         ? 'bg-rose-100 text-rose-600'
                         : isRoutine
                         ? 'bg-amber-100 text-amber-600'
@@ -509,6 +581,16 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
                           やり直し
                         </span>
                       )}
+                      {isOpen && (
+                        <span className="text-[9px] bg-slate-200/80 text-slate-600 border border-slate-300 px-1.5 py-0.2 rounded-md font-bold">
+                          未実施
+                        </span>
+                      )}
+                      {isPenalized && (
+                        <span className="text-[9px] bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.2 rounded-md font-bold">
+                          期限超過
+                        </span>
+                      )}
                       {item.createdBy && (
                         <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded-md font-medium">
                           {item.createdBy.includes('@') ? item.createdBy.split('@')[0] : item.createdBy}
@@ -532,6 +614,10 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
                       ? 'text-amber-500'
                       : isRejected
                       ? 'text-rose-400 line-through'
+                      : isOpen
+                      ? 'text-slate-400'
+                      : isPenalized
+                      ? 'text-rose-500 line-through'
                       : item.amount > 0
                       ? 'text-amber-600'
                       : item.amount < 0
@@ -586,12 +672,22 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
                   </h4>
                   {selectedItem.status === 'pending' && (
                     <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full border border-amber-300">
-                      申請中（未承認）
+                      {selectedItem.sourceType === 'routine' ? '確認中（承認待ち）' : '申請中（未承認）'}
                     </span>
                   )}
                   {selectedItem.status === 'rejected' && (
                     <span className="text-[10px] bg-rose-100 text-rose-700 font-bold px-2 py-0.5 rounded-full border border-rose-200">
                       やり直し
+                    </span>
+                  )}
+                  {selectedItem.status === 'open' && (
+                    <span className="text-[10px] bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-full border border-slate-300">
+                      未実施
+                    </span>
+                  )}
+                  {selectedItem.status === 'penalized' && (
+                    <span className="text-[10px] bg-rose-100 text-rose-700 font-bold px-2 py-0.5 rounded-full border border-rose-200">
+                      期限超過
                     </span>
                   )}
                 </div>
@@ -763,25 +859,37 @@ export const HistorySearchView: React.FC<HistorySearchViewProps> = ({
                   )}
                 </div>
 
-                {/* 親画面限定: 修正・削除アクションボタン */}
+                {/* 親画面限定: アクション案内 / 修正・削除ボタン */}
                 {isParent && (
-                  <div className="flex gap-2 pt-2 border-t border-slate-100">
-                    <button
-                      type="button"
-                      onClick={startEdit}
-                      className="flex-1 py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs flex items-center justify-center gap-1.5 transition border border-indigo-200/60"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                      <span>修正</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowDeleteConfirm(true)}
-                      className="flex-1 py-2 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs flex items-center justify-center gap-1.5 transition border border-rose-200/60"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>削除</span>
-                    </button>
+                  <div className="pt-2 border-t border-slate-100">
+                    {selectedItem.sourceType === 'routine' ? (
+                      <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/80 text-[11px] text-slate-500 text-center">
+                        {selectedItem.status === 'pending'
+                          ? '※この「いつもやること」はダッシュボード上部の承認枠から承認・差戻しを行えます。'
+                          : selectedItem.status === 'open'
+                          ? '※子どもが「おわったよ！」を送信するまで未実施として記録されます。'
+                          : '※「いつも」タブからタスク自体の設定を変更・削除できます。'}
+                      </div>
+                    ) : (
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={startEdit}
+                          className="flex-1 py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs flex items-center justify-center gap-1.5 transition border border-indigo-200/60"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                          <span>修正</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowDeleteConfirm(true)}
+                          className="flex-1 py-2 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs flex items-center justify-center gap-1.5 transition border border-rose-200/60"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>削除</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
