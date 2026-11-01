@@ -19,7 +19,8 @@ import {
   INITIAL_ROUTINE_LOGS
 } from '../data/initialData';
 import {
-  calculateDueDate
+  calculateDueDate,
+  getLocalDateStr
 } from '../utils/scheduleUtils';
 import { isFirebaseConfigured, auth, db } from '../lib/firebase';
 import {
@@ -464,19 +465,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 期限切れペナルティ自動チェック（起動時やデータ更新時に判定）
   const checkAndApplyOverduePenalties = async () => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    // ローカルタイムゾーン基準の当日日付 (YYYY-MM-DD) を取得
+    const todayStr = getLocalDateStr();
     let updatedLogs = [...routineLogs];
     let currentBalance = household.balance;
     let nextTxs = [...transactions];
     let hadPenalty = false;
 
-    // 過去7日間のログを点検
+    // ログを点検
     for (const rLog of updatedLogs) {
-      // 未完了・未ペナルティかつ、期日を過ぎている場合
+      // 安全対策:
+      // 1. 子どもが「おわったよ！」と報告済みのもの (status === 'pending') は、
+      //    親の承認待ち状態であり未達成ではないため、勝手に期限切れペナルティにして残高を減額しない。
+      //    未実施のまま放置されたもの (status === 'open') のみ対象とする。
+      // 2. 期日 (rLog.dueDate) を過ぎており、ペナルティ額が設定されていること。
+      // 3. すでに該当ルーティンログに対するペナルティ取引 (tx-pen-...-logId) が存在する場合は二重適用しない。
+      const alreadyHasPenaltyTx = nextTxs.some(
+        (tx) => tx.type === 'penalty' && (tx.id.includes(rLog.id) || tx.title.includes(rLog.title) && tx.date === rLog.dueDate)
+      );
+
       if (
-        (rLog.status === 'open' || rLog.status === 'pending') &&
+        rLog.status === 'open' &&
         rLog.dueDate < todayStr &&
-        rLog.penaltyAmount > 0
+        rLog.penaltyAmount > 0 &&
+        !alreadyHasPenaltyTx
       ) {
         hadPenalty = true;
         const nowIso = new Date().toISOString();
@@ -494,16 +506,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           date: todayStr,
           createdAt: nowIso,
           createdBy: 'システム自動判定',
-          note: `期日(${rLog.dueDate})までに承認されませんでした`,
+          note: `期日(${rLog.dueDate})までに実施・報告がありませんでした`,
         };
         nextTxs = [newTx, ...nextTxs];
 
         if (isFirebaseConfigured && db) {
-          await updateDoc(doc(db, 'routineLogs', rLog.id), {
-            status: 'penalized',
-            penalizedAt: nowIso,
-          });
-          await setDoc(doc(db, 'transactions', newTx.id), newTx);
+          try {
+            await updateDoc(doc(db, 'routineLogs', rLog.id), {
+              status: 'penalized',
+              penalizedAt: nowIso,
+            });
+            await setDoc(doc(db, 'transactions', newTx.id), newTx);
+          } catch (err) {
+            console.warn('Firebase sync error for overdue penalty:', err);
+          }
         }
       }
     }

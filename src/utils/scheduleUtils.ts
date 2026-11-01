@@ -54,6 +54,14 @@ export function calculateDueDate(targetDateStr: string, graceDays: number): stri
   return `${y}-${m}-${day}`;
 }
 
+// ローカル日時基準の YYYY-MM-DD 文字列を取得する
+export function getLocalDateStr(date: Date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 // 日付文字列 (YYYY-MM-DD) の差分日数 (dateB - dateA)
 export function getDaysDiff(dateAStr: string, dateBStr: string): number {
   const a = new Date(dateAStr).getTime();
