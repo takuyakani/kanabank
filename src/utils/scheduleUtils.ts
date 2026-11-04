@@ -64,9 +64,87 @@ export function getLocalDateStr(date: Date = new Date()): string {
 
 // 日付文字列 (YYYY-MM-DD) の差分日数 (dateB - dateA)
 export function getDaysDiff(dateAStr: string, dateBStr: string): number {
-  const a = new Date(dateAStr).getTime();
-  const b = new Date(dateBStr).getTime();
-  return Math.floor((b - a) / (1000 * 60 * 60 * 24));
+  const partsA = dateAStr.split('-').map(Number);
+  const partsB = dateBStr.split('-').map(Number);
+  const a = new Date(partsA[0], partsA[1] - 1, partsA[2]).getTime();
+  const b = new Date(partsB[0], partsB[1] - 1, partsB[2]).getTime();
+  return Math.round((b - a) / (1000 * 60 * 60 * 24));
+}
+
+// 目標達成に必要な1日あたりの積み上げペース計算結果
+export interface GoalPaceResult {
+  hasTargetDate: boolean;
+  targetDate?: string;
+  diffDays: number;
+  remainingAmount: number;
+  dailyPace: number;
+  status: 'reached' | 'active' | 'today' | 'overdue' | 'none';
+}
+
+// 目標までの残り日数と1日あたりの必要積み上げペースを算出
+export function calculateGoalPace(
+  balance: number,
+  goalAmount: number,
+  targetDateStr?: string,
+  todayStr: string = getLocalDateStr()
+): GoalPaceResult {
+  const remainingAmount = Math.max(0, goalAmount - balance);
+
+  if (remainingAmount <= 0) {
+    return {
+      hasTargetDate: Boolean(targetDateStr),
+      targetDate: targetDateStr,
+      diffDays: 0,
+      remainingAmount: 0,
+      dailyPace: 0,
+      status: 'reached',
+    };
+  }
+
+  if (!targetDateStr) {
+    return {
+      hasTargetDate: false,
+      diffDays: 0,
+      remainingAmount,
+      dailyPace: 0,
+      status: 'none',
+    };
+  }
+
+  const diffDays = getDaysDiff(todayStr, targetDateStr);
+
+  if (diffDays > 0) {
+    // 目標日が未来（残り diffDays 日）
+    const dailyPace = Math.ceil(remainingAmount / diffDays);
+    return {
+      hasTargetDate: true,
+      targetDate: targetDateStr,
+      diffDays,
+      remainingAmount,
+      dailyPace,
+      status: 'active',
+    };
+  } else if (diffDays === 0) {
+    // 目標日が当日
+    return {
+      hasTargetDate: true,
+      targetDate: targetDateStr,
+      diffDays: 0,
+      remainingAmount,
+      dailyPace: remainingAmount,
+      status: 'today',
+    };
+  } else {
+    // 目標日を超過
+    return {
+      hasTargetDate: true,
+      targetDate: targetDateStr,
+      diffDays,
+      remainingAmount,
+      dailyPace: 0,
+      status: 'overdue',
+    };
+  }
 }
 
 // スケジュール設定の説明文を生成する

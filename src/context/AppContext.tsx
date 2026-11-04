@@ -60,7 +60,7 @@ interface AppContextType {
   isDemoMode: boolean;
   login: (email: string, pass: string, targetRole: Role) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
-  updateGoal: (title: string, amount: number) => Promise<{ success: boolean; error?: string }>;
+  updateGoal: (title: string, amount: number, targetDate?: string) => Promise<{ success: boolean; error?: string }>;
   updateBalance: (newBalance: number, reason?: string) => Promise<{ success: boolean; error?: string }>;
   submitChoreRequest: (choreId: string, comment?: string) => Promise<void>;
   submitCustomChoreRequest: (title: string, comment?: string, requestedReward?: number) => Promise<void>;
@@ -325,6 +325,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 balance: typeof remoteData.balance === 'number' ? remoteData.balance : prev.balance,
                 goalTitle: remoteData.goalTitle ? String(remoteData.goalTitle) : prev.goalTitle || INITIAL_HOUSEHOLD.goalTitle,
                 goalAmount: typeof remoteData.goalAmount === 'number' && remoteData.goalAmount > 0 ? remoteData.goalAmount : prev.goalAmount || INITIAL_HOUSEHOLD.goalAmount,
+                goalTargetDate: remoteData.goalTargetDate !== undefined ? (remoteData.goalTargetDate || undefined) : prev.goalTargetDate,
                 updatedAt: remoteData.updatedAt || new Date().toISOString(),
               };
               // ローカルストレージにも安全に同期キャッシュ
@@ -612,7 +613,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // 目標の更新
-  const updateGoal = async (title: string, amount: number) => {
+  const updateGoal = async (title: string, amount: number, targetDate?: string) => {
     const cleanAmount = Math.floor(amount);
     if (!title.trim()) {
       return { success: false, error: '目標の名前を入力してください。' };
@@ -621,10 +622,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: '目標金額は1円以上で設定してください。' };
     }
 
+    const cleanTargetDate = targetDate?.trim() || undefined;
+
     const updated: HouseholdData = {
       ...household,
       goalTitle: title.trim(),
       goalAmount: cleanAmount,
+      goalTargetDate: cleanTargetDate,
       updatedAt: new Date().toISOString(),
     };
 
@@ -945,6 +949,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       balance: household.balance - household.goalAmount,
       goalTitle: 'つぎの目標を決めよう！',
       goalAmount: 3000,
+      goalTargetDate: undefined,
       updatedAt: new Date().toISOString(),
     };
     setHousehold(nextHousehold);

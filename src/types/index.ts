@@ -12,6 +12,7 @@ export interface HouseholdData {
   balance: number;            // 現在のバーチャル残高（円）
   goalTitle: string;          // 目標名（例: スイッチのソフト）
   goalAmount: number;         // 目標金額（円）
+  goalTargetDate?: string;    // 目標達成日（YYYY-MM-DD、任意）
   updatedAt: string;
 }
 

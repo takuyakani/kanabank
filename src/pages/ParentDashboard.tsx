@@ -9,7 +9,7 @@ import {
   type FirebaseCustomConfig
 } from '../lib/firebase';
 import type { ChoreMaster, RoutineTask, RoutineLog, ScheduleType, Transaction } from '../types';
-import { formatScheduleDescription, isTaskScheduledForDate } from '../utils/scheduleUtils';
+import { formatScheduleDescription, isTaskScheduledForDate, calculateGoalPace } from '../utils/scheduleUtils';
 import {
   Check,
   X,
@@ -93,6 +93,7 @@ export const ParentDashboard: React.FC = () => {
   const [isEditingGoal, setIsEditingGoal] = useState(false);
   const [goalTitleInput, setGoalTitleInput] = useState(household.goalTitle);
   const [goalAmountInput, setGoalAmountInput] = useState<number>(household.goalAmount);
+  const [goalTargetDateInput, setGoalTargetDateInput] = useState(household.goalTargetDate || '');
   const [goalError, setGoalError] = useState('');
   const [goalSuccess, setGoalSuccess] = useState(false);
 
@@ -200,6 +201,8 @@ export const ParentDashboard: React.FC = () => {
   const [fbConfigMessage, setFbConfigMessage] = useState('');
 
   const isGoalReached = household.balance >= household.goalAmount && household.goalAmount > 0;
+  const goalPace = calculateGoalPace(household.balance, household.goalAmount, household.goalTargetDate);
+  const modalPacePreview = calculateGoalPace(household.balance, Number(goalAmountInput) || 0, goalTargetDateInput);
   const pendingRequests = requests.filter((r) => r.status === 'pending');
   const pendingRoutineLogs = routineLogs.filter((l) => l.status === 'pending');
 
@@ -364,7 +367,7 @@ export const ParentDashboard: React.FC = () => {
   const handleSaveGoal = async (e: React.FormEvent) => {
     e.preventDefault();
     setGoalError('');
-    const res = await updateGoal(goalTitleInput, Number(goalAmountInput));
+    const res = await updateGoal(goalTitleInput, Number(goalAmountInput), goalTargetDateInput);
     if (!res.success) {
       setGoalError(res.error || '目標の更新に失敗しました。');
       return;
@@ -937,32 +940,74 @@ export const ParentDashboard: React.FC = () => {
         )}
 
         {/* 親からの目標表示＆編集カード */}
-        <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
-              <Trophy className="w-5 h-5" />
+        <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                <Trophy className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-slate-400">現在の子どもの目標</p>
+                <h3 className="font-extrabold text-sm text-slate-800 leading-tight">
+                  {household.goalTitle}
+                </h3>
+                <p className="text-xs font-black text-amber-600 mt-0.5">
+                  目標金額: {household.goalAmount} 円
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-[10px] font-bold text-slate-400">現在の子どもの目標</p>
-              <h3 className="font-extrabold text-sm text-slate-800 leading-tight">
-                {household.goalTitle}
-              </h3>
-              <p className="text-xs font-black text-amber-600 mt-0.5">
-                目標金額: {household.goalAmount} 円
-              </p>
-            </div>
+            <button
+              onClick={() => {
+                setGoalTitleInput(household.goalTitle);
+                setGoalAmountInput(household.goalAmount);
+                setGoalTargetDateInput(household.goalTargetDate || '');
+                setGoalError('');
+                setIsEditingGoal(true);
+              }}
+              className="px-3 py-1.5 rounded-xl bg-amber-50 text-amber-700 hover:bg-amber-100 font-bold text-xs transition shrink-0"
+            >
+              目標を編集
+            </button>
           </div>
-          <button
-            onClick={() => {
-              setGoalTitleInput(household.goalTitle);
-              setGoalAmountInput(household.goalAmount);
-              setGoalError('');
-              setIsEditingGoal(true);
-            }}
-            className="px-3 py-1.5 rounded-xl bg-amber-50 text-amber-700 hover:bg-amber-100 font-bold text-xs transition shrink-0"
-          >
-            目標を編集
-          </button>
+
+          {/* 目標日と必要ペース情報 */}
+          {household.goalTargetDate && (
+            <div className="pt-2 border-t border-slate-100">
+              {goalPace.status === 'active' && (
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs bg-amber-50/70 border border-amber-200/60 rounded-xl px-3 py-2 text-amber-900">
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                    <span>目標日: {household.goalTargetDate.replace(/-/g, '/')}</span>
+                    <span className="text-[11px] bg-amber-200/70 text-amber-800 px-1.5 py-0.2 rounded font-extrabold">
+                      あと {goalPace.diffDays} 日
+                    </span>
+                  </div>
+                  <div className="font-black text-amber-700">
+                    目標まで 1日あたり <span className="text-sm underline decoration-amber-400 font-extrabold">約 {goalPace.dailyPace} 円</span> ペース
+                    <span className="text-[10px] font-normal text-slate-500 ml-1">（残り {goalPace.remainingAmount} 円）</span>
+                  </div>
+                </div>
+              )}
+              {goalPace.status === 'today' && (
+                <div className="flex items-center justify-between text-xs bg-amber-500 text-white rounded-xl px-3 py-2 font-bold">
+                  <div className="flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5" />
+                    <span>今日が目標達成予定日です！</span>
+                  </div>
+                  <span>目標まであと {goalPace.remainingAmount} 円</span>
+                </div>
+              )}
+              {goalPace.status === 'overdue' && (
+                <div className="flex items-center justify-between text-xs bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 text-rose-700 font-semibold">
+                  <div className="flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                    <span>目標日（{household.goalTargetDate.replace(/-/g, '/')}）を過ぎています</span>
+                  </div>
+                  <span className="text-[11px] text-rose-500">新しい目標日を設定してください</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {goalSuccess && (
@@ -2099,6 +2144,41 @@ export const ParentDashboard: React.FC = () => {
                   className="w-full px-3 py-2 border rounded-xl text-sm"
                 />
               </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-slate-500">目標達成予定日（任意）</label>
+                  {goalTargetDateInput && (
+                    <button
+                      type="button"
+                      onClick={() => setGoalTargetDateInput('')}
+                      className="text-[10px] text-slate-400 hover:text-slate-600 underline"
+                    >
+                      設定解除
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="date"
+                  value={goalTargetDateInput}
+                  onChange={(e) => setGoalTargetDateInput(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-xl text-sm"
+                />
+              </div>
+
+              {/* ペースのリアルタイムプレビュー */}
+              {goalTargetDateInput && modalPacePreview.status === 'active' && (
+                <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 font-semibold flex items-center justify-between">
+                  <span>あと {modalPacePreview.diffDays} 日</span>
+                  <span className="font-extrabold text-amber-700">
+                    1日 約 {modalPacePreview.dailyPace} 円 ペース
+                  </span>
+                </div>
+              )}
+              {goalTargetDateInput && modalPacePreview.status === 'overdue' && (
+                <p className="text-[11px] text-rose-500 font-medium">
+                  ※ 今日以降の日付を選択してください
+                </p>
+              )}
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"

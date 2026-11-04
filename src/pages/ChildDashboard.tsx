@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { CalendarView } from '../components/CalendarView';
 import { HistorySearchView } from '../components/HistorySearchView';
-import { isTaskScheduledForDate } from '../utils/scheduleUtils';
+import { isTaskScheduledForDate, calculateGoalPace } from '../utils/scheduleUtils';
 import type { FontSizePreference } from '../types';
 import {
   Coins,
@@ -95,6 +95,7 @@ export const ChildDashboard: React.FC = () => {
   const [isEditingGoal, setIsEditingGoal] = useState(false);
   const [goalTitleInput, setGoalTitleInput] = useState(household.goalTitle);
   const [goalAmountInput, setGoalAmountInput] = useState(household.goalAmount);
+  const [goalTargetDateInput, setGoalTargetDateInput] = useState(household.goalTargetDate || '');
   const [goalError, setGoalError] = useState('');
 
   // 目標達成引き換えモーダル
@@ -117,6 +118,8 @@ export const ChildDashboard: React.FC = () => {
   // 達成率計算
   const isGoalReached = household.balance >= household.goalAmount && household.goalAmount > 0;
   const progressPercent = Math.min(100, Math.floor((household.balance / (household.goalAmount || 1)) * 100));
+  const goalPace = calculateGoalPace(household.balance, household.goalAmount, household.goalTargetDate);
+  const modalPacePreview = calculateGoalPace(household.balance, Number(goalAmountInput) || 0, goalTargetDateInput);
 
   // 今日のルーティン抽出
   const todayObj = new Date();
@@ -193,7 +196,7 @@ export const ChildDashboard: React.FC = () => {
   const handleSaveGoal = async (e: React.FormEvent) => {
     e.preventDefault();
     setGoalError('');
-    const res = await updateGoal(goalTitleInput, Number(goalAmountInput));
+    const res = await updateGoal(goalTitleInput, Number(goalAmountInput), goalTargetDateInput);
     if (!res.success) {
       setGoalError(res.error || '目標の更新に失敗しました。');
       return;
@@ -512,6 +515,7 @@ export const ChildDashboard: React.FC = () => {
                   onClick={() => {
                     setGoalTitleInput(household.goalTitle);
                     setGoalAmountInput(household.goalAmount);
+                    setGoalTargetDateInput(household.goalTargetDate || '');
                     setGoalError('');
                     setIsEditingGoal(true);
                   }}
@@ -529,10 +533,60 @@ export const ChildDashboard: React.FC = () => {
                 />
               </div>
 
-              <div className="flex justify-between text-xs text-slate-500 font-semibold">
+              <div className="flex justify-between text-xs text-slate-500 font-semibold mb-2">
                 <span>{progressPercent}% 達成</span>
                 <span>もくひょう: {household.goalAmount}円</span>
               </div>
+
+              {/* 目標日付とペース表示 */}
+              {household.goalTargetDate && (
+                <div className="pt-2 border-t border-slate-100 mt-2">
+                  {goalPace.status === 'active' && (
+                    <div className="flex items-center justify-between text-xs bg-amber-50/70 border border-amber-200/60 rounded-xl px-3 py-2 text-amber-900">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                        <span>
+                          {textMode === 'hiragana' ? 'もくひょうび:' : '目標日:'} {household.goalTargetDate.replace(/-/g, '/')}
+                        </span>
+                        <span className="text-[11px] bg-amber-200/70 text-amber-800 px-1.5 py-0.2 rounded font-extrabold ml-1">
+                          {textMode === 'hiragana' ? `あと${goalPace.diffDays}にち` : `あと${goalPace.diffDays}日`}
+                        </span>
+                      </div>
+                      <div className="font-black text-amber-700">
+                        {textMode === 'hiragana'
+                          ? `1にち ${goalPace.dailyPace} えん ペース`
+                          : `1日 ${goalPace.dailyPace} 円 ペース`}
+                      </div>
+                    </div>
+                  )}
+                  {goalPace.status === 'today' && (
+                    <div className="flex items-center justify-between text-xs bg-amber-500 text-white rounded-xl px-3 py-2 font-bold shadow-xs">
+                      <div className="flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5" />
+                        <span>{textMode === 'hiragana' ? 'きょうが もくひょうび！' : '今日が目標日！'}</span>
+                      </div>
+                      <span>
+                        {textMode === 'hiragana'
+                          ? `あと ${goalPace.remainingAmount} えん`
+                          : `あと ${goalPace.remainingAmount} 円`}
+                      </span>
+                    </div>
+                  )}
+                  {goalPace.status === 'overdue' && (
+                    <div className="flex items-center justify-between text-xs bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 text-rose-700 font-semibold">
+                      <div className="flex items-center gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                        <span>
+                          {textMode === 'hiragana'
+                            ? `もくひょうび(${household.goalTargetDate.replace(/-/g, '/')})を すぎています`
+                            : `目標日(${household.goalTargetDate.replace(/-/g, '/')})を過ぎています`}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-rose-500">あたらしく設定しよう</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* 親の承認まちバナー */}
@@ -929,6 +983,51 @@ export const ChildDashboard: React.FC = () => {
                   className="w-full px-3 py-2 border rounded-xl text-sm"
                 />
               </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-slate-500">
+                    {textMode === 'hiragana' ? 'いつまでに ためる？（もくひょうび・にんい）' : 'いつまでに貯める？（目標日・任意）'}
+                  </label>
+                  {goalTargetDateInput && (
+                    <button
+                      type="button"
+                      onClick={() => setGoalTargetDateInput('')}
+                      className="text-[10px] text-slate-400 hover:text-slate-600 underline"
+                    >
+                      {textMode === 'hiragana' ? 'とりけす' : '設定解除'}
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="date"
+                  value={goalTargetDateInput}
+                  onChange={(e) => setGoalTargetDateInput(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-xl text-sm"
+                />
+              </div>
+
+              {/* ペースのリアルタイムプレビュー */}
+              {goalTargetDateInput && modalPacePreview.status === 'active' && (
+                <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 font-semibold flex items-center justify-between">
+                  <span>
+                    {textMode === 'hiragana'
+                      ? `あと ${modalPacePreview.diffDays} にち`
+                      : `あと ${modalPacePreview.diffDays} 日`}
+                  </span>
+                  <span className="font-extrabold text-amber-700">
+                    {textMode === 'hiragana'
+                      ? `1にち ${modalPacePreview.dailyPace} えん ペース！`
+                      : `1日あたり 約 ${modalPacePreview.dailyPace} 円 ペース！`}
+                  </span>
+                </div>
+              )}
+              {goalTargetDateInput && modalPacePreview.status === 'overdue' && (
+                <p className="text-[11px] text-rose-500 font-medium">
+                  {textMode === 'hiragana'
+                    ? '※ きょう より あとの ひづけを えらんでね'
+                    : '※ 今日以降の日付を選択してください'}
+                </p>
+              )}
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
